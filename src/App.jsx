@@ -965,9 +965,8 @@ function PriceListView({ brands, items, settings, isAdmin }) {
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,marginTop:8}}>
                 <div style={{flex:1,height:1,background:C.border}} />
                 <div style={{background:C.navy,color:"#fff",borderRadius:20,padding:"4px 14px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>{day}</div>
-                <div style={{flex:1,height:1,background:C Here is the fully corrected code with all fixes applied. I removed the duplicate Firebase initialization and the unused `useFirestoreSync` function, and cleaned up the imports.
-
-```jsx
+                <div style={{flex:1,height:1,background:C.border}} />
+              
 // ─────────────────────────────────────────────────────────────────
 //  VK Furnishing Price App  v4.0  — Firebase Edition
 // ─────────────────────────────────────────────────────────────────
