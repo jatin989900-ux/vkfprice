@@ -29,7 +29,7 @@ async function fsSave(key, value) {
 }
 
 // ── CONSTANTS ─────────────────────────────────────────────────────
-const VER  = "4.2";
+const VER  = "4.3";
 const CATS = ["Bed Sheets","Comforters","Comforter Sets","Towels","Pillows","Dohars","Blankets","Top Sheets","Other Items"];
 const GST_OPTS = [{ label:"5% — Default (Textiles)", v:0.05 },{ label:"12%", v:0.12 },{ label:"18%", v:0.18 }];
 const ADDON_OPTS = [
@@ -70,8 +70,6 @@ function resolveDM(item, brand, settings) {
 }
 
 // ── COMPUTE ───────────────────────────────────────────────────────
-// RL/DM/PL are Inc-GST selling prices → back out GST to get profit
-// SDM is Ex-GST → profit = sdm − purchaseEx directly
 function computeItem(item, brand, settings) {
   const rlM = resolveRL(item, brand, settings);
   const dmM = resolveDM(item, brand, settings);
@@ -86,19 +84,18 @@ function computeItem(item, brand, settings) {
   const dm = dmCustom !== null ? dmCustom : calcDM(ex, dmM);
   const pl = calcPL(rl, add);
 
-  // SDM: Ex-GST price = purchaseEx + sdmAddon
   const sdmAddOnRaw = item.sdmAddon;
   const sdmAddOn = (sdmAddOnRaw !== "" && sdmAddOnRaw != null && !isNaN(parseFloat(sdmAddOnRaw)) && parseFloat(sdmAddOnRaw) >= 0) ? parseFloat(sdmAddOnRaw) : null;
-  const sdm = (sdmAddOn !== null && ex > 0) ? +(ex + sdmAddOn).toFixed(2) : null;
+  const sdm    = (sdmAddOn !== null && ex > 0) ? +(ex + sdmAddOn).toFixed(2) : null;
+  // SDM inc-GST total (for display)
+  const sdmInc = sdm != null ? +(sdm * (1 + gst)).toFixed(2) : null;
 
-  // Profit for RL/DM/PL: back out GST from Inc-GST price first
   function profitIncGST(price) {
     if (price == null || !ex || ex <= 0) return null;
     const exRev = price / (1 + gst);
     const amt   = +(exRev - ex).toFixed(2);
     return { amt, pct: +((amt / ex) * 100).toFixed(1) };
   }
-  // Profit for SDM: both Ex-GST, direct subtraction
   function profitExGST(price) {
     if (price == null || !ex || ex <= 0) return null;
     const amt = +(price - ex).toFixed(2);
@@ -110,7 +107,7 @@ function computeItem(item, brand, settings) {
     rlM, rl, rlProfit: profitIncGST(rl),
     dmM, dm, dmProfit: profitIncGST(dm),
     add, pl, plProfit: profitIncGST(pl),
-    sdmAddOn, sdm, sdmProfit: profitExGST(sdm),
+    sdmAddOn, sdm, sdmInc, sdmProfit: profitExGST(sdm),
     rlPriceLocked: rlCustom !== null,
     dmPriceLocked: dmCustom !== null,
     gst,
@@ -118,7 +115,8 @@ function computeItem(item, brand, settings) {
 }
 
 // ── DEFAULTS ──────────────────────────────────────────────────────
-const DEF_S = { co:"VK Furnishing", tag:"Wholesale Bedding & Textiles, Delhi NCR", defaultRL:0.18, defaultDM:null, adminPIN:"1234", salesPIN:"0000" };
+// sdmPIN added
+const DEF_S = { co:"VK Furnishing", tag:"Wholesale Bedding & Textiles, Delhi NCR", defaultRL:0.18, defaultDM:null, adminPIN:"1234", salesPIN:"0000", sdmPIN:"9999" };
 const DEF_B = [
   { id:"b1", code:"TRI", name:"Trident",      rlMarkup:0.22, dmMarkup:null },
   { id:"b2", code:"STH", name:"Story@Home",   rlMarkup:0.18, dmMarkup:null },
@@ -194,12 +192,13 @@ function SyncBadge({ status }) {
 function Chip({ col, bg, br, children }) {
   return <span style={{ display:"inline-block", padding:"2px 9px", borderRadius:20, fontSize:11, fontWeight:700, color:col, background:bg, border:"1px solid "+br }}>{children}</span>;
 }
-function PBox({ label, val, col, bg, br, locked, large }) {
+function PBox({ label, val, col, bg, br, locked, large, locked2, onClick }) {
   return (
-    <div style={{ flex:1, background:bg, border:"1px solid "+(locked?col:br), borderRadius:10, padding:large?"14px 10px":"9px 6px", textAlign:"center", position:"relative" }}>
-      {locked && <div style={{ position:"absolute", top:3, right:5, fontSize:9, color:col, fontWeight:800 }}>📌</div>}
+    <div onClick={onClick} style={{ flex:1, background:bg, border:"1px solid "+(locked?col:br), borderRadius:10, padding:large?"14px 10px":"9px 6px", textAlign:"center", position:"relative", cursor:onClick?"pointer":"default" }}>
+      {locked  && <div style={{ position:"absolute", top:3, right:5, fontSize:9, color:col, fontWeight:800 }}>📌</div>}
+      {locked2 && <div style={{ position:"absolute", top:3, right:5, fontSize:10 }}>🔒</div>}
       <div style={{ fontSize:9, fontWeight:700, color:C.mute, letterSpacing:"0.5px", textTransform:"uppercase", marginBottom:3 }}>{label}</div>
-      <div style={{ fontSize:large?22:15, fontWeight:800, color:col }}>{val}</div>
+      <div style={{ fontSize:large?18:15, fontWeight:800, color:col }}>{val}</div>
     </div>
   );
 }
@@ -279,12 +278,42 @@ function ProfitRow({ label, col, price, profit, locked, exGST }) {
   );
 }
 
+// ── SDM PIN MODAL ─────────────────────────────────────────────────
+function SDMPinModal({ pin, onSuccess, onClose }) {
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div style={{ background:"#fff", borderRadius:22, padding:"28px 24px", width:"100%", maxWidth:320, boxShadow:"0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ textAlign:"center", marginBottom:16 }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>🟠</div>
+          <div style={{ fontSize:16, fontWeight:800, color:C.text }}>SDM Prices</div>
+          <div style={{ fontSize:12, color:C.sec, marginTop:4 }}>Enter SDM PIN to view special pricing</div>
+        </div>
+        <PINPad
+          label="Enter SDM PIN"
+          pin={pin}
+          onSuccess={() => { onSuccess(); }}
+        />
+        <div style={{ marginTop:16 }}>
+          <BtnO color={C.sec} onClick={onClose}>Cancel</BtnO>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── ITEM CARD ─────────────────────────────────────────────────────
-function ItemCard({ it, isAdmin, showDate, priceFilter }) {
+function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick }) {
   const filter = priceFilter || "all";
   const single = filter !== "all";
   const isNew    = it.createdAt && it.updatedAt && sameDay(it.createdAt, it.updatedAt);
   const isEdited = it.createdAt && it.updatedAt && !sameDay(it.createdAt, it.updatedAt);
+
+  // SDM display value — shown only when unlocked (or admin)
+  const canSeeSdm = isAdmin || sdmUnlocked;
+  const sdmVal = canSeeSdm && it.sdm != null
+    ? fp(it.sdm) + " + GST = " + fp(it.sdmInc)
+    : "🔒 PIN required";
+
   return (
     <div style={{ background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"13px", marginBottom:8, boxShadow:"0 1px 5px rgba(0,0,0,0.04)" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:9 }}>
@@ -315,23 +344,38 @@ function ItemCard({ it, isAdmin, showDate, priceFilter }) {
 
       {single ? (
         <div>
-          {filter === "rl"  && <PBox label="RL — Wholesale (Inc-GST)"       val={fp(it.rl)}                            col={C.rl}  bg={C.rlBg}  br={C.rlBr}  locked={it.rlPriceLocked} large />}
-          {filter === "dm"  && <PBox label="DM — Sp. Wholesale (Inc-GST)"   val={fp(it.dm)}                            col={C.dm}  bg={C.dmBg}  br={C.dmBr}  locked={it.dmPriceLocked} large />}
-          {filter === "pl"  && <PBox label="PL — Retail (Inc-GST)"           val={fp(it.pl)}                            col={C.pl}  bg={C.plBg}  br={C.plBr}  large />}
-          {filter === "sdm" && <PBox label="SDM (Ex-GST — + GST extra)"      val={it.sdm ? fp(it.sdm) + " + GST" : "—"} col={C.sdm} bg={C.sdmBg} br={C.sdmBr} large />}
+          {filter === "rl"  && <PBox label="RL — Wholesale (Inc-GST)"     val={fp(it.rl)}  col={C.rl}  bg={C.rlBg}  br={C.rlBr}  locked={it.rlPriceLocked} large />}
+          {filter === "dm"  && <PBox label="DM — Sp. Wholesale (Inc-GST)" val={fp(it.dm)}  col={C.dm}  bg={C.dmBg}  br={C.dmBr}  locked={it.dmPriceLocked} large />}
+          {filter === "pl"  && <PBox label="PL — Retail (Inc-GST)"        val={fp(it.pl)}  col={C.pl}  bg={C.plBg}  br={C.plBr}  large />}
+          {filter === "sdm" && (
+            <PBox
+              label="SDM — Ex-GST + total"
+              val={canSeeSdm && it.sdm != null ? fp(it.sdm) + " + GST = " + fp(it.sdmInc) : "🔒 Tap to unlock"}
+              col={C.sdm} bg={C.sdmBg} br={C.sdmBr}
+              locked2={!canSeeSdm}
+              large
+              onClick={!canSeeSdm ? onSDMClick : undefined}
+            />
+          )}
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
-          <PBox label="RL — Wholesale"  val={fp(it.rl)}                            col={C.rl}  bg={C.rlBg}  br={C.rlBr}  locked={it.rlPriceLocked} />
-          <PBox label="DM — Sp. WHL"    val={fp(it.dm)}                            col={C.dm}  bg={C.dmBg}  br={C.dmBr}  locked={it.dmPriceLocked} />
-          <PBox label="PL — Retail"     val={fp(it.pl)}                            col={C.pl}  bg={C.plBg}  br={C.plBr} />
-          <PBox label="SDM + GST extra" val={it.sdm ? fp(it.sdm) + " + GST" : "—"} col={C.sdm} bg={C.sdmBg} br={C.sdmBr} />
+          <PBox label="RL — Wholesale"  val={fp(it.rl)}  col={C.rl}  bg={C.rlBg}  br={C.rlBr}  locked={it.rlPriceLocked} />
+          <PBox label="DM — Sp. WHL"    val={fp(it.dm)}  col={C.dm}  bg={C.dmBg}  br={C.dmBr}  locked={it.dmPriceLocked} />
+          <PBox label="PL — Retail"     val={fp(it.pl)}  col={C.pl}  bg={C.plBg}  br={C.plBr} />
+          <PBox
+            label="SDM (tap to unlock)"
+            val={canSeeSdm && it.sdm != null ? fp(it.sdm) + " + GST = " + fp(it.sdmInc) : "🔒"}
+            col={C.sdm} bg={canSeeSdm ? C.sdmBg : "#F3F4F6"} br={canSeeSdm ? C.sdmBr : C.border}
+            locked2={!canSeeSdm}
+            onClick={!canSeeSdm ? onSDMClick : undefined}
+          />
         </div>
       )}
 
       {isAdmin && (
         <div style={{ marginTop:9 }}>
-          <div style={{ fontSize:10, fontWeight:700, color:C.profit, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:5 }}>💰 Profit / piece — RL/DM/PL: GST backed out first · SDM: Ex-GST direct</div>
+          <div style={{ fontSize:10, fontWeight:700, color:C.profit, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:5 }}>💰 Profit / piece — RL/DM/PL: GST backed out · SDM: Ex-GST direct</div>
           <ProfitRow label="RL (Inc-GST)" col={C.rl}  price={it.rl}  profit={it.rlProfit}  locked={it.rlPriceLocked} />
           <ProfitRow label="DM (Inc-GST)" col={C.dm}  price={it.dm}  profit={it.dmProfit}  locked={it.dmPriceLocked} />
           <ProfitRow label="PL (Inc-GST)" col={C.pl}  price={it.pl}  profit={it.plProfit} />
@@ -350,9 +394,7 @@ function Drawer({ open, onClose, title, footer, children }) {
     <div>
       <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", zIndex:500 }} />
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:501, background:"#fff", borderRadius:"22px 22px 0 0", maxHeight:"92vh", display:"flex", flexDirection:"column", boxShadow:"0 -8px 40px rgba(0,0,0,0.18)" }}>
-        <div style={{ display:"flex", justifyContent:"center", padding:"10px 0 0" }}>
-          <div style={{ width:36, height:4, borderRadius:2, background:C.border }} />
-        </div>
+        <div style={{ display:"flex", justifyContent:"center", padding:"10px 0 0" }}><div style={{ width:36, height:4, borderRadius:2, background:C.border }} /></div>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 20px 12px" }}>
           <div style={{ fontSize:18, fontWeight:800, color:C.text }}>{title}</div>
           <button onClick={onClose} style={{ width:34, height:34, borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:16, color:C.sec, fontFamily:"inherit" }}>✕</button>
@@ -370,10 +412,7 @@ function Confirm({ title, msg, onOk, onNo }) {
       <div style={{ background:"#fff", borderRadius:18, padding:"26px 22px", maxWidth:320, width:"100%" }}>
         <div style={{ fontSize:17, fontWeight:800, color:C.text, marginBottom:8 }}>{title}</div>
         <div style={{ fontSize:13, color:C.sec, lineHeight:1.7, marginBottom:24 }}>{msg}</div>
-        <div style={{ display:"flex", gap:10 }}>
-          <BtnO onClick={onNo}>Cancel</BtnO>
-          <BtnP color={C.red} onClick={onOk}>Delete</BtnP>
-        </div>
+        <div style={{ display:"flex", gap:10 }}><BtnO onClick={onNo}>Cancel</BtnO><BtnP color={C.red} onClick={onOk}>Delete</BtnP></div>
       </div>
     </div>
   );
@@ -466,7 +505,7 @@ function BrandsView({ brands, onBrandsChange }) {
   return (
     <div style={{ padding:"16px 16px 80px" }}>
       {conf && <Confirm title="Remove Brand?" msg="Items using this brand will keep prices but lose markup override." onOk={() => del(conf)} onNo={() => setConf(null)} />}
-      <div style={{ background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#1E40AF", lineHeight:1.6 }}><strong>Brand markups are defaults.</strong> You can override RL/DM per item in Master Sheet.</div>
+      <div style={{ background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#1E40AF", lineHeight:1.6 }}><strong>Brand markups are defaults.</strong> Override per item in Master Sheet.</div>
       <BtnP onClick={() => { setForm(EF); setEid(null); setOpen(true); }}>+ Add Brand</BtnP>
       <div style={{ height:12 }} />
       {brands.length === 0 && <div style={{ textAlign:"center", padding:"36px", color:C.mute, fontSize:14 }}>No brands yet.</div>}
@@ -490,9 +529,9 @@ function BrandsView({ brands, onBrandsChange }) {
       ))}
       <Drawer open={open} onClose={close} title={eid ? "Edit Brand" : "Add Brand"}
         footer={<div style={{ display:"flex", gap:9 }}><BtnO onClick={close}>Cancel</BtnO><BtnP color={eid?"#F59E0B":C.blue} onClick={save}>{eid ? "Update" : "Add Brand"}</BtnP></div>}>
-        <Fld label="Brand Code *" hint="3–6 letters e.g. TRI, STH, LOC"><input style={INP} maxLength={6} value={form.code} placeholder="TRI" onChange={e => setForm(p => ({...p, code:e.target.value.toUpperCase()}))} /></Fld>
+        <Fld label="Brand Code *" hint="3–6 letters"><input style={INP} maxLength={6} value={form.code} placeholder="TRI" onChange={e => setForm(p => ({...p, code:e.target.value.toUpperCase()}))} /></Fld>
         <Fld label="Brand Name *"><input style={INP} value={form.name} placeholder="e.g. Trident" onChange={e => setForm(p => ({...p, name:e.target.value}))} /></Fld>
-        <Fld label="Default RL Markup % *" hint="Enter number: 18 = 18%"><input style={INP} type="number" step="0.5" value={form.rlMarkup} placeholder="18" onChange={e => setForm(p => ({...p, rlMarkup:e.target.value}))} /></Fld>
+        <Fld label="Default RL Markup % *" hint="18 = 18%"><input style={INP} type="number" step="0.5" value={form.rlMarkup} placeholder="18" onChange={e => setForm(p => ({...p, rlMarkup:e.target.value}))} /></Fld>
         <Fld label="Default DM Markup %" hint="Leave blank to decide later."><input style={INP} type="number" step="0.5" value={form.dmMarkup} placeholder="Leave blank" onChange={e => setForm(p => ({...p, dmMarkup:e.target.value}))} /></Fld>
       </Drawer>
     </div>
@@ -524,20 +563,20 @@ function ExportModal({ items, brands, settings, onClose }) {
   }
   function adminRows() {
     return filtered.map(it => ({
-      "Category":it.cat, "Brand Code":it._b?it._b.code:"", "Brand Name":it._b?it._b.name:"", "Item Name":it.name,
-      "Purchase Ex-GST":it.purchaseEx, "GST %":(it.gst*100).toFixed(0)+"%", "Purchase Inc-GST":it.incGST,
-      "RL Markup":it.rlPriceLocked?"(price locked)":fpct(it.rlM), "RL Price (Inc-GST)":it.rl||"", "RL Profit Rs":it.rlProfit?it.rlProfit.amt:"", "RL Profit %":it.rlProfit?it.rlProfit.pct:"",
-      "DM Markup":it.dmPriceLocked?"(price locked)":it.dmM!=null?fpct(it.dmM):"", "DM Price (Inc-GST)":it.dm||"", "DM Profit Rs":it.dmProfit?it.dmProfit.amt:"", "DM Profit %":it.dmProfit?it.dmProfit.pct:"",
-      "PL Addon":it.add||"", "PL Price (Inc-GST)":it.pl||"", "PL Profit Rs":it.plProfit?it.plProfit.amt:"", "PL Profit %":it.plProfit?it.plProfit.pct:"",
-      "SDM Addon":it.sdmAddOn||"", "SDM Price (Ex-GST)":it.sdm||"", "SDM Profit Rs":it.sdmProfit?it.sdmProfit.amt:"", "SDM Profit %":it.sdmProfit?it.sdmProfit.pct:"",
-      "Status":it.active?"Active":"Inactive", "Added On":fmtDate(it.createdAt), "Updated On":fmtDate(it.updatedAt), "Notes":it.notes,
+      "Category":it.cat,"Brand Code":it._b?it._b.code:"","Brand Name":it._b?it._b.name:"","Item Name":it.name,
+      "Purchase Ex-GST":it.purchaseEx,"GST %":(it.gst*100).toFixed(0)+"%","Purchase Inc-GST":it.incGST,
+      "RL Markup":it.rlPriceLocked?"(locked)":fpct(it.rlM),"RL Price (Inc-GST)":it.rl||"","RL Profit Rs":it.rlProfit?it.rlProfit.amt:"","RL Profit %":it.rlProfit?it.rlProfit.pct:"",
+      "DM Markup":it.dmPriceLocked?"(locked)":it.dmM!=null?fpct(it.dmM):"","DM Price (Inc-GST)":it.dm||"","DM Profit Rs":it.dmProfit?it.dmProfit.amt:"","DM Profit %":it.dmProfit?it.dmProfit.pct:"",
+      "PL Addon":it.add||"","PL Price (Inc-GST)":it.pl||"","PL Profit Rs":it.plProfit?it.plProfit.amt:"","PL Profit %":it.plProfit?it.plProfit.pct:"",
+      "SDM Addon":it.sdmAddOn||"","SDM Price (Ex-GST)":it.sdm||"","SDM Inc-GST":it.sdmInc||"","SDM Profit Rs":it.sdmProfit?it.sdmProfit.amt:"","SDM Profit %":it.sdmProfit?it.sdmProfit.pct:"",
+      "Status":it.active?"Active":"Inactive","Added On":fmtDate(it.createdAt),"Updated On":fmtDate(it.updatedAt),"Notes":it.notes,
     }));
   }
   function salesRows() {
     return filtered.map(it => ({
-      "Category":it.cat, "Brand Code":it._b?it._b.code:"", "Brand Name":it._b?it._b.name:"", "Item Name":it.name,
-      "GST %":(it.gst*100).toFixed(0)+"%", "RL Price":it.rl||"", "DM Price":it.dm||"", "PL Price":it.pl||"",
-      "SDM Price (Ex-GST, + GST extra)":it.sdm||"", "Notes":it.notes,
+      "Category":it.cat,"Brand Code":it._b?it._b.code:"","Brand Name":it._b?it._b.name:"","Item Name":it.name,
+      "GST %":(it.gst*100).toFixed(0)+"%","RL Price":it.rl||"","DM Price":it.dm||"","PL Price":it.pl||"",
+      "SDM Price (Ex-GST)":it.sdm||"","SDM Inc-GST Total":it.sdmInc||"","Notes":it.notes,
     }));
   }
   return (
@@ -556,7 +595,7 @@ function ExportModal({ items, brands, settings, onClose }) {
         </div>
         <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"13px", marginBottom:10 }}>
           <div style={{ fontSize:12, fontWeight:800, color:C.amb, marginBottom:3 }}>🔐 Admin Export</div>
-          <div style={{ fontSize:11, color:C.amb, marginBottom:10 }}>Includes purchase + profit. Do NOT share with staff.</div>
+          <div style={{ fontSize:11, color:C.amb, marginBottom:10 }}>Includes purchase + profit. Do NOT share.</div>
           <div style={{ display:"flex", gap:8 }}><BtnP color={C.amb} onClick={() => doXLSX(adminRows(),"VKF_Admin")} style={{ fontSize:12, padding:"10px" }}>📊 Excel</BtnP><BtnO color={C.amb} onClick={() => doJSON(adminRows(),"VKF_Admin")} style={{ fontSize:12, padding:"10px" }}>JSON</BtnO></div>
         </div>
         <div style={{ background:C.rlBg, border:"1px solid "+C.rlBr, borderRadius:10, padding:"13px" }}>
@@ -593,10 +632,10 @@ function MasterView({ brands, items, onItemsChange, settings }) {
     if (!form.name.trim()) e.name = "Item name required";
     const px = parseFloat(form.purchaseEx);
     if (!form.purchaseEx || isNaN(px) || px <= 0) e.px = "Enter a valid purchase price";
-    if (form.customRL !== "" && form.customRL != null) { const v = parseFloat(form.customRL); if (isNaN(v)||v<0||v>100) e.crl = "Enter 0–100 (e.g. 15 for 15%)"; }
-    if (form.customDM !== "" && form.customDM != null) { const v = parseFloat(form.customDM); if (isNaN(v)||v<0||v>100) e.cdm = "Enter 0–100 (e.g. 10 for 10%)"; }
-    if (form.customRLPrice !== "" && form.customRLPrice != null) { const v = parseFloat(form.customRLPrice); if (isNaN(v)||v<=0) e.crlp = "Enter a valid price greater than 0"; }
-    if (form.customDMPrice !== "" && form.customDMPrice != null) { const v = parseFloat(form.customDMPrice); if (isNaN(v)||v<=0) e.cdmp = "Enter a valid price greater than 0"; }
+    if (form.customRL !== "" && form.customRL != null) { const v = parseFloat(form.customRL); if (isNaN(v)||v<0||v>100) e.crl = "Enter 0–100"; }
+    if (form.customDM !== "" && form.customDM != null) { const v = parseFloat(form.customDM); if (isNaN(v)||v<0||v>100) e.cdm = "Enter 0–100"; }
+    if (form.customRLPrice !== "" && form.customRLPrice != null) { const v = parseFloat(form.customRLPrice); if (isNaN(v)||v<=0) e.crlp = "Enter a valid price > 0"; }
+    if (form.customDMPrice !== "" && form.customDMPrice != null) { const v = parseFloat(form.customDMPrice); if (isNaN(v)||v<=0) e.cdmp = "Enter a valid price > 0"; }
     if (form.sdmAddon !== "" && form.sdmAddon != null) { const v = parseFloat(form.sdmAddon); if (isNaN(v)||v<0) e.sdma = "Enter 0 or more"; }
     if (form.plAddon === "custom") { const cv = parseFloat(form.customAddon); if (isNaN(cv)||cv<=0) e.ca = "Enter a valid amount"; }
     setErrs(e);
@@ -623,8 +662,8 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   }, [items, brands, settings, fCat, fSt]);
 
   function ei(k) { return errs[k] ? Object.assign({}, INP, { borderColor:C.red }) : INP; }
-  const rlSrc = fpctRaw(form.customRL) ? "override (" + fpctRaw(form.customRL) + ")" : brand ? "brand " + brand.code + " (" + (brand.rlMarkup*100).toFixed(0) + "%)" : "default (" + (settings.defaultRL*100).toFixed(0) + "%)";
-  const dmSrc = fpctRaw(form.customDM) ? "override (" + fpctRaw(form.customDM) + ")" : brand && brand.dmMarkup != null ? "brand " + brand.code + " (" + (brand.dmMarkup*100).toFixed(0) + "%)" : settings.defaultDM ? "default (" + (parseFloat(settings.defaultDM)*100).toFixed(0) + "%)" : "not set";
+  const rlSrc = fpctRaw(form.customRL) ? "override ("+fpctRaw(form.customRL)+")" : brand ? "brand "+brand.code+" ("+(brand.rlMarkup*100).toFixed(0)+"%)" : "default ("+(settings.defaultRL*100).toFixed(0)+"%)";
+  const dmSrc = fpctRaw(form.customDM) ? "override ("+fpctRaw(form.customDM)+")" : brand&&brand.dmMarkup!=null ? "brand "+brand.code+" ("+(brand.dmMarkup*100).toFixed(0)+"%)" : settings.defaultDM ? "default ("+(parseFloat(settings.defaultDM)*100).toFixed(0)+"%)" : "not set";
   const rlPriceLocked = form.customRLPrice !== "" && form.customRLPrice != null && !isNaN(parseFloat(form.customRLPrice)) && parseFloat(form.customRLPrice) > 0;
   const dmPriceLocked = form.customDMPrice !== "" && form.customDMPrice != null && !isNaN(parseFloat(form.customDMPrice)) && parseFloat(form.customDMPrice) > 0;
   const sdmHas = form.sdmAddon !== "" && form.sdmAddon != null && !isNaN(parseFloat(form.sdmAddon));
@@ -634,7 +673,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       {conf && <Confirm title="Delete Item?" msg="This will permanently remove the item." onOk={() => del(conf)} onNo={() => setConf(null)} />}
       {showExp && <ExportModal items={items} brands={brands} settings={settings} onClose={() => setShowExp(false)} />}
       <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"9px 13px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
-        ⚠ Purchase price WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
+        ⚠ Purchase WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
       </div>
       <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
         <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fCat} onChange={e => setFCat(e.target.value)}>
@@ -652,7 +691,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       {list.length === 0 && <div style={{ textAlign:"center", padding:"36px", color:C.mute, fontSize:14 }}>No items. Add using the button above.</div>}
       {list.map(it => (
         <div key={it.id}>
-          <ItemCard it={it} isAdmin showDate />
+          <ItemCard it={it} isAdmin showDate sdmUnlocked={true} />
           <div style={{ display:"flex", gap:8, marginTop:-4, marginBottom:8 }}>
             <button onClick={() => openEdit(it)} style={{ flex:1, padding:"9px", borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:13, fontWeight:600, color:C.sec, fontFamily:"inherit" }}>Edit</button>
             <button onClick={() => toggle(it.id)} style={{ flex:1, padding:"9px", borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:12, fontWeight:600, color:it.active?"#991B1B":"#065F46", fontFamily:"inherit" }}>{it.active ? "Set Inactive" : "Set Active"}</button>
@@ -676,47 +715,42 @@ function MasterView({ brands, items, onItemsChange, settings }) {
         <Fld label="Purchase Price WITHOUT GST (₹) *" err={errs.px}>
           <input style={Object.assign({},ei("px"),{fontWeight:700,fontSize:16,color:C.blue})} type="number" step="0.01" placeholder="e.g. 380" value={form.purchaseEx} onChange={e => setForm(p => ({...p,purchaseEx:e.target.value}))} />
         </Fld>
-        <Fld label="GST % *" hint="Default 5% for textiles. Change only if different.">
+        <Fld label="GST % *" hint="Default 5% for textiles.">
           <select style={SEL} value={form.gst} onChange={e => setForm(p => ({...p,gst:parseFloat(e.target.value)}))}>
             {GST_OPTS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
           </select>
-          {prevEx > 0 && <div style={{ marginTop:4, fontSize:12, color:C.amb, fontWeight:600 }}>{"Purchase Inc-GST = " + fp(calcIncGST(prevEx, form.gst))}</div>}
+          {prevEx > 0 && <div style={{ marginTop:4, fontSize:12, color:C.amb, fontWeight:600 }}>Purchase Inc-GST = {fp(calcIncGST(prevEx, form.gst))}</div>}
         </Fld>
-
         {/* RL */}
         <div style={{ background:"#F8FDF9", border:"1px solid "+C.rlBr, borderRadius:11, padding:"12px", marginBottom:14 }}>
           <div style={{ fontSize:11, fontWeight:800, color:C.rl, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:10 }}>🟢 RL — Wholesale (Inc-GST)</div>
           <MarginOverride label={rlPriceLocked?"Custom RL Margin % (ignored — price locked)":"Custom RL Margin %"} col={C.rl} bg={C.rlBg} br={C.rlBr} value={form.customRL} onChange={v => setForm(p => ({...p,customRL:v}))} srcLabel={rlSrc} err={errs.crl} />
           <PriceOverride  label="Custom RL Price ₹ (Direct)" col={C.rl} bg={C.rlBg} br={C.rlBr} value={form.customRLPrice} onChange={v => setForm(p => ({...p,customRLPrice:v}))} err={errs.crlp} hint="Enter exact RL price — margin % ignored" />
         </div>
-
         {/* DM */}
         <div style={{ background:"#F0F6FF", border:"1px solid "+C.dmBr, borderRadius:11, padding:"12px", marginBottom:14 }}>
           <div style={{ fontSize:11, fontWeight:800, color:C.dm, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:10 }}>🔵 DM — Special Wholesale (Inc-GST)</div>
           <MarginOverride label={dmPriceLocked?"Custom DM Margin % (ignored — price locked)":"Custom DM Margin %"} col={C.dm} bg={C.dmBg} br={C.dmBr} value={form.customDM} onChange={v => setForm(p => ({...p,customDM:v}))} srcLabel={dmSrc} err={errs.cdm} />
           <PriceOverride  label="Custom DM Price ₹ (Direct)" col={C.dm} bg={C.dmBg} br={C.dmBr} value={form.customDMPrice} onChange={v => setForm(p => ({...p,customDMPrice:v}))} err={errs.cdmp} hint="Enter exact DM price — margin % ignored" />
         </div>
-
-        {/* SDM — NEW */}
+        {/* SDM */}
         <div style={{ background:C.sdmBg, border:"1px solid "+C.sdmBr, borderRadius:11, padding:"12px", marginBottom:14 }}>
-          <div style={{ fontSize:11, fontWeight:800, color:C.sdm, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>🟠 SDM — Special DM (Ex-GST)</div>
-          <div style={{ fontSize:11, color:C.sdm, marginBottom:10 }}>Customer pays this Ex-GST price + GST on top. Profit = add-on amount.</div>
+          <div style={{ fontSize:11, fontWeight:800, color:C.sdm, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>🟠 SDM — Special DM (Ex-GST, + GST extra)</div>
+          <div style={{ fontSize:11, color:C.sdm, marginBottom:10 }}>Customer pays this + GST. Profit = add-on amount. Hidden behind PIN in salesman view.</div>
           <Fld label="SDM Add-on ₹ (added to purchase Ex-GST)" err={errs.sdma}
-            hint={prevEx > 0 && sdmHas ? "SDM = " + fp(prevEx + parseFloat(form.sdmAddon)) + " Ex-GST · Profit = ₹" + parseFloat(form.sdmAddon).toFixed(2) : "e.g. enter 20 → SDM = purchase + ₹20"}>
+            hint={prevEx > 0 && sdmHas ? "SDM = " + fp(prevEx + parseFloat(form.sdmAddon)) + " Ex-GST · +" + (form.gst*100).toFixed(0) + "% GST = " + fp(+((prevEx+parseFloat(form.sdmAddon))*(1+parseFloat(form.gst))).toFixed(2)) + " · Profit = ₹" + parseFloat(form.sdmAddon).toFixed(2) : "e.g. 20 → SDM = purchase + ₹20"}>
             <input style={Object.assign({},INP,{borderColor:errs.sdma?C.red:sdmHas?C.sdm:C.border,fontWeight:sdmHas?700:400,color:sdmHas?C.sdm:C.text})}
               type="number" step="1" min="0" placeholder="e.g. 20"
               value={form.sdmAddon} onChange={e => setForm(p => ({...p,sdmAddon:e.target.value}))} />
           </Fld>
         </div>
-
         {/* PL */}
-        <Fld label="PL Add-on ₹ (extra on top of RL — result is Inc-GST)" err={errs.ca}>
+        <Fld label="PL Add-on ₹ (on top of RL — Inc-GST total)" err={errs.ca}>
           <select style={SEL} value={form.plAddon||""} onChange={e => { const v = e.target.value; setForm(p => ({...p,plAddon:v===""?"":v==="custom"?"custom":parseInt(v)})); }}>
             {ADDON_OPTS.map(o => <option key={String(o.v)} value={o.v}>{o.label}</option>)}
           </select>
           {form.plAddon === "custom" && <input style={Object.assign({},INP,{marginTop:7})} type="number" placeholder="Custom ₹ amount" value={form.customAddon} onChange={e => setForm(p => ({...p,customAddon:e.target.value}))} />}
         </Fld>
-
         {/* Live Preview */}
         {prev && (
           <div style={{ background:"#F8FAFF", border:"1px solid #BFDBFE", borderRadius:11, padding:"13px", marginBottom:6 }}>
@@ -731,20 +765,18 @@ function MasterView({ brands, items, onItemsChange, settings }) {
                 <div style={{ fontSize:13, fontWeight:800 }}>{prev.rlPriceLocked ? "📌 Fixed" : fpct(prev.rlM)}</div>
               </div>
             </div>
-            <div style={{ fontSize:10, color:C.sec, marginBottom:5, fontWeight:600 }}>RL/DM/PL profit = (price ÷ (1+GST%)) − purchase Ex-GST</div>
+            <div style={{ fontSize:10, color:C.sec, marginBottom:5, fontWeight:600 }}>RL/DM/PL profit = (price ÷ (1+GST)) − purchase</div>
             <ProfitRow label="RL (Inc-GST)" col={C.rl}  price={prev.rl}  profit={prev.rlProfit}  locked={prev.rlPriceLocked} />
             <ProfitRow label="DM (Inc-GST)" col={C.dm}  price={prev.dm}  profit={prev.dmProfit}  locked={prev.dmPriceLocked} />
             <ProfitRow label="PL (Inc-GST)" col={C.pl}  price={prev.pl}  profit={prev.plProfit} />
             {prev.sdm && (
               <div>
-                <div style={{ fontSize:10, color:C.sdm, marginTop:5, marginBottom:3, fontWeight:600 }}>SDM profit = SDM Ex-GST − purchase Ex-GST</div>
+                <div style={{ fontSize:10, color:C.sdm, marginTop:5, marginBottom:3, fontWeight:600 }}>SDM = Ex-GST · profit = add-on · customer pays {fp(prev.sdmInc)} inc-GST</div>
                 <ProfitRow label="SDM (Ex-GST)" col={C.sdm} price={prev.sdm} profit={prev.sdmProfit} exGST />
-                <div style={{ fontSize:11, color:C.sdm, fontWeight:600, marginTop:2 }}>Customer pays: {fp(prev.sdm)} + {(parseFloat(form.gst)*100).toFixed(0)}% GST = {fp(+(prev.sdm*(1+parseFloat(form.gst))).toFixed(2))} inc-GST</div>
               </div>
             )}
           </div>
         )}
-
         <Fld label="Notes (optional)"><input style={INP} value={form.notes} placeholder="e.g. seasonal, imported..." onChange={e => setForm(p => ({...p,notes:e.target.value}))} /></Fld>
         <Fld label="Status">
           <div style={{ display:"flex", gap:8 }}>
@@ -762,7 +794,7 @@ const PRICE_FILTERS = [
   { id:"rl",  label:"🟢 RL",      col:C.rl,   bg:C.rlBg,   br:C.rlBr },
   { id:"dm",  label:"🔵 DM",      col:C.dm,   bg:C.dmBg,   br:C.dmBr },
   { id:"pl",  label:"🟣 PL",      col:C.pl,   bg:C.plBg,   br:C.plBr },
-  { id:"sdm", label:"🟠 SDM",     col:C.sdm,  bg:C.sdmBg,  br:C.sdmBr },
+  { id:"sdm", label:"🟠 SDM 🔒",  col:C.sdm,  bg:C.sdmBg,  br:C.sdmBr },
 ];
 
 function PriceListView({ brands, items, settings, isAdmin }) {
@@ -771,6 +803,19 @@ function PriceListView({ brands, items, settings, isAdmin }) {
   const [fBrand,   setFBrand]   = useState("All");
   const [search,   setSearch]   = useState("");
   const [priceFilter, setPriceFilter] = useState("all");
+  // SDM PIN state (salesman only)
+  const [sdmUnlocked, setSdmUnlocked] = useState(false);
+  const [showSDMPin,  setShowSDMPin]  = useState(false);
+
+  function handleSDMClick() {
+    if (sdmUnlocked) return;
+    setShowSDMPin(true);
+  }
+  function handleSDMFilterClick() {
+    if (priceFilter === "sdm") { setPriceFilter("all"); return; }
+    if (!sdmUnlocked) { setShowSDMPin(true); return; }
+    setPriceFilter("sdm");
+  }
 
   const enriched = useMemo(() => {
     return items.filter(i => i.active).map(i => { const b = brands.find(x => x.id===i.bId)||null; return Object.assign({}, i, computeItem(i,b,settings), {_b:b}); });
@@ -789,12 +834,26 @@ function PriceListView({ brands, items, settings, isAdmin }) {
     const g = {}; sorted.forEach(i => { const k = dateGroupKey(i.updatedAt); if (!g[k]) g[k]=[]; g[k].push(i); }); return g;
   }, [filtered]);
 
-  const today   = new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
-  const views   = [{ id:"general", icon:"📂", label:"By Category" }, { id:"date", icon:"📅", label:"By Date" }];
+  const today        = new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
+  const views        = [{ id:"general", icon:"📂", label:"By Category" }, { id:"date", icon:"📅", label:"By Date" }];
   const activeFilter = isAdmin ? "all" : priceFilter;
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
+      {/* SDM PIN Modal */}
+      {showSDMPin && !isAdmin && (
+        <SDMPinModal
+          pin={settings.sdmPIN || "9999"}
+          onSuccess={() => {
+            setSdmUnlocked(true);
+            setShowSDMPin(false);
+            setPriceFilter("sdm");
+            toast("SDM prices unlocked 🟠");
+          }}
+          onClose={() => setShowSDMPin(false)}
+        />
+      )}
+
       <div style={{ background:C.navy, borderRadius:13, padding:"15px", marginBottom:12, color:"#fff" }}>
         <div style={{ fontWeight:800, fontSize:17 }}>{settings.co}</div>
         <div style={{ fontSize:11, color:"rgba(255,255,255,0.5)", marginTop:2 }}>{settings.tag}</div>
@@ -827,23 +886,32 @@ function PriceListView({ brands, items, settings, isAdmin }) {
         </select>
       </div>
 
-      {/* Price filter — salesman only */}
+      {/* Price type filter — salesman: clickable buttons with SDM PIN lock */}
       {!isAdmin ? (
         <div style={{ marginBottom:12 }}>
           <div style={{ fontSize:11, fontWeight:700, color:C.mute, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:6 }}>Show Price Type</div>
           <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
             {PRICE_FILTERS.map(f => {
               const on = priceFilter === f.id;
+              const isSdm = f.id === "sdm";
+              const label = isSdm ? (sdmUnlocked ? "🟠 SDM 🔓" : "🟠 SDM 🔒") : f.label;
               return (
-                <button key={f.id} onClick={() => setPriceFilter(f.id)}
+                <button key={f.id}
+                  onClick={isSdm ? handleSDMFilterClick : () => setPriceFilter(f.id)}
                   style={{ padding:"7px 14px", borderRadius:20, border:"1.5px solid "+(on?f.col:C.border), background:on?f.bg:"#fff", color:on?f.col:C.sec, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
-                  {f.label}
+                  {label}
                 </button>
               );
             })}
           </div>
+          {sdmUnlocked && (
+            <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ fontSize:11, color:C.sdm, fontWeight:700 }}>🔓 SDM prices unlocked for this session</div>
+              <button onClick={() => { setSdmUnlocked(false); if (priceFilter === "sdm") setPriceFilter("all"); }} style={{ fontSize:11, color:C.sec, background:"none", border:"none", cursor:"pointer", padding:0, fontFamily:"inherit", textDecoration:"underline" }}>Lock again</button>
+            </div>
+          )}
           {priceFilter !== "all" && (
-            <div style={{ fontSize:11, marginTop:6, color:PRICE_FILTERS.find(f=>f.id===priceFilter).col, fontWeight:600 }}>
+            <div style={{ fontSize:11, marginTop:4, color:PRICE_FILTERS.find(f=>f.id===priceFilter).col, fontWeight:600 }}>
               {priceFilter === "rl"  && "Showing RL — Wholesale prices (Inc-GST)"}
               {priceFilter === "dm"  && "Showing DM — Special Wholesale prices (Inc-GST)"}
               {priceFilter === "pl"  && "Showing PL — Retail prices (Inc-GST)"}
@@ -868,7 +936,9 @@ function PriceListView({ brands, items, settings, isAdmin }) {
           {Object.keys(grouped).map(cat => (
             <div key={cat}>
               <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:7, marginTop:4, textTransform:"uppercase", letterSpacing:"0.4px", borderLeft:"3px solid "+C.blue, paddingLeft:9 }}>{cat}</div>
-              {grouped[cat].map(it => <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate={false} priceFilter={activeFilter} />)}
+              {grouped[cat].map(it => (
+                <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate={false} priceFilter={activeFilter} sdmUnlocked={isAdmin||sdmUnlocked} onSDMClick={handleSDMClick} />
+              ))}
             </div>
           ))}
         </div>
@@ -884,7 +954,9 @@ function PriceListView({ brands, items, settings, isAdmin }) {
                 <div style={{ background:C.navy, color:"#fff", borderRadius:20, padding:"4px 14px", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>{day}</div>
                 <div style={{ flex:1, height:1, background:C.border }} />
               </div>
-              {byDate[day].map(it => <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate priceFilter={activeFilter} />)}
+              {byDate[day].map(it => (
+                <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate priceFilter={activeFilter} sdmUnlocked={isAdmin||sdmUnlocked} onSDMClick={handleSDMClick} />
+              ))}
             </div>
           ))}
         </div>
@@ -895,9 +967,18 @@ function PriceListView({ brands, items, settings, isAdmin }) {
 
 // ── SETTINGS VIEW ─────────────────────────────────────────────────
 function SettingsView({ settings, onSettingsChange, syncStatus }) {
-  const [form, setForm] = useState({ co:settings.co, tag:settings.tag, defaultRL:+(settings.defaultRL*100).toFixed(1), defaultDM:settings.defaultDM!=null?+(parseFloat(settings.defaultDM)*100).toFixed(1):"" });
-  useEffect(() => { setForm({ co:settings.co, tag:settings.tag, defaultRL:+(settings.defaultRL*100).toFixed(1), defaultDM:settings.defaultDM!=null?+(parseFloat(settings.defaultDM)*100).toFixed(1):"" }); }, [settings]);
-  const [nAP,setNAP]=useState(""); const [cAP,setCAP]=useState(""); const [nSP,setNSP]=useState(""); const [cSP,setCSP]=useState("");
+  const [form, setForm] = useState({
+    co:settings.co, tag:settings.tag,
+    defaultRL:+(settings.defaultRL*100).toFixed(1),
+    defaultDM:settings.defaultDM!=null?+(parseFloat(settings.defaultDM)*100).toFixed(1):"",
+  });
+  useEffect(() => {
+    setForm({ co:settings.co, tag:settings.tag, defaultRL:+(settings.defaultRL*100).toFixed(1), defaultDM:settings.defaultDM!=null?+(parseFloat(settings.defaultDM)*100).toFixed(1):"" });
+  }, [settings]);
+  const [nAP,setNAP]=useState(""); const [cAP,setCAP]=useState("");
+  const [nSP,setNSP]=useState(""); const [cSP,setCSP]=useState("");
+  const [nSDM,setNSDM]=useState(""); const [cSDM,setCSDM]=useState("");
+
   function saveGen() {
     if (!form.co.trim()) return toast("Company name required","err");
     if (isNaN(parseFloat(form.defaultRL))) return toast("RL markup must be a number","err");
@@ -905,14 +986,26 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
     toast("Settings saved");
   }
   function changePIN(type) {
-    const np = type==="admin"?nAP:nSP, cp = type==="admin"?cAP:cSP;
+    const np = type==="admin"?nAP:type==="salesman"?nSP:nSDM;
+    const cp = type==="admin"?cAP:type==="salesman"?cSP:cSDM;
     if (np.length!==4||isNaN(parseInt(np))) return toast("PIN must be exactly 4 digits","err");
     if (np!==cp) return toast("PINs do not match","err");
-    onSettingsChange({ ...settings, [type==="admin"?"adminPIN":"salesPIN"]:np });
-    if (type==="admin"){setNAP("");setCAP("");}else{setNSP("");setCSP("");}
-    toast((type==="admin"?"Admin":"Salesman")+" PIN updated");
+    const key = type==="admin"?"adminPIN":type==="salesman"?"salesPIN":"sdmPIN";
+    onSettingsChange({ ...settings, [key]:np });
+    if (type==="admin"){setNAP("");setCAP("");}
+    else if (type==="salesman"){setNSP("");setCSP("");}
+    else {setNSDM("");setCSDM("");}
+    const label = type==="admin"?"Admin":type==="salesman"?"Salesman":"SDM";
+    toast(label + " PIN updated");
   }
+
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:13, padding:"17px", marginBottom:13, boxShadow:"0 1px 6px rgba(0,0,0,0.04)" };
+  const pinBlocks = [
+    { type:"admin",    label:"Admin",    col:C.navy, nv:nAP, setNV:setNAP, cv:cAP, setCV:setCAP },
+    { type:"salesman", label:"Salesman", col:C.blue, nv:nSP, setNV:setNSP, cv:cSP, setCV:setCSP },
+    { type:"sdm",      label:"SDM View", col:C.sdm,  nv:nSDM,setNV:setNSDM,cv:cSDM,setCV:setCSDM },
+  ];
+
   return (
     <div style={{ padding:"16px 16px 80px" }}>
       <div style={Object.assign({},SS,{display:"flex",alignItems:"center",justifyContent:"space-between"})}>
@@ -923,16 +1016,30 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
         <div style={{ fontSize:14, fontWeight:800, marginBottom:14 }}>General Settings</div>
         <Fld label="Company Name"><input style={INP} value={form.co} onChange={e => setForm(p => ({...p,co:e.target.value}))} /></Fld>
         <Fld label="Tagline"><input style={INP} value={form.tag} onChange={e => setForm(p => ({...p,tag:e.target.value}))} /></Fld>
-        <Fld label="Default RL Markup %" hint="Enter number: 18 = 18%"><input style={INP} type="number" step="0.5" value={form.defaultRL} onChange={e => setForm(p => ({...p,defaultRL:e.target.value}))} /></Fld>
+        <Fld label="Default RL Markup %" hint="18 = 18%"><input style={INP} type="number" step="0.5" value={form.defaultRL} onChange={e => setForm(p => ({...p,defaultRL:e.target.value}))} /></Fld>
         <Fld label="Default DM Markup %" hint="Leave blank if not decided."><input style={INP} type="number" step="0.5" placeholder="Leave blank" value={form.defaultDM} onChange={e => setForm(p => ({...p,defaultDM:e.target.value}))} /></Fld>
         <BtnP onClick={saveGen}>Save Settings</BtnP>
       </div>
-      {[{type:"admin",label:"Admin"},{type:"salesman",label:"Salesman"}].map(pt => (
+      {pinBlocks.map(pt => (
         <div key={pt.type} style={SS}>
-          <div style={{ fontSize:14, fontWeight:800, marginBottom:14 }}>{"Change " + pt.label + " PIN"}</div>
-          <Fld label="New PIN (4 digits)"><input style={INP} type="password" maxLength={4} placeholder="4-digit PIN" value={pt.type==="admin"?nAP:nSP} onChange={e => { const v=e.target.value.replace(/\D/g,"").slice(0,4); pt.type==="admin"?setNAP(v):setNSP(v); }} /></Fld>
-          <Fld label="Confirm PIN"><input style={INP} type="password" maxLength={4} placeholder="Re-enter to confirm" value={pt.type==="admin"?cAP:cSP} onChange={e => { const v=e.target.value.replace(/\D/g,"").slice(0,4); pt.type==="admin"?setCAP(v):setCSP(v); }} /></Fld>
-          <BtnP color="#6D28D9" onClick={() => changePIN(pt.type)}>{"Update " + pt.label + " PIN"}</BtnP>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:14 }}>
+            <div style={{ width:10, height:10, borderRadius:"50%", background:pt.col }} />
+            <div style={{ fontSize:14, fontWeight:800 }}>{"Change " + pt.label + " PIN"}</div>
+          </div>
+          {pt.type === "sdm" && (
+            <div style={{ background:C.sdmBg, border:"1px solid "+C.sdmBr, borderRadius:8, padding:"8px 12px", marginBottom:12, fontSize:12, color:C.sdm, fontWeight:600 }}>
+              🟠 This PIN is required by salesmen to view SDM prices. Keep it confidential.
+            </div>
+          )}
+          <Fld label="New PIN (4 digits)">
+            <input style={INP} type="password" maxLength={4} placeholder="4-digit PIN"
+              value={pt.nv} onChange={e => { const v=e.target.value.replace(/\D/g,"").slice(0,4); pt.setNV(v); }} />
+          </Fld>
+          <Fld label="Confirm PIN">
+            <input style={INP} type="password" maxLength={4} placeholder="Re-enter to confirm"
+              value={pt.cv} onChange={e => { const v=e.target.value.replace(/\D/g,"").slice(0,4); pt.setCV(v); }} />
+          </Fld>
+          <BtnP color={pt.col} onClick={() => changePIN(pt.type)}>{"Update " + pt.label + " PIN"}</BtnP>
         </div>
       ))}
       <div style={Object.assign({},SS,{textAlign:"center"})}>
@@ -998,7 +1105,7 @@ export default function App() {
 
   useEffect(() => {
     fsLoad().then(d => {
-      if (d.settings) setSettings(d.settings);
+      if (d.settings) setSettings(s => Object.assign({}, DEF_S, d.settings)); // merge so new sdmPIN default applies
       if (d.brands)   setBrands(d.brands);
       if (d.items)    setItems(d.items);
       setReady(true);
@@ -1009,9 +1116,9 @@ export default function App() {
   useEffect(() => {
     if (!ready || listenersStarted.current) return;
     listenersStarted.current = true;
-    const unsubS = onSnapshot(FS.settings(), snap => { if (snap.exists()) setSettings(snap.data().v); }, () => setSyncStatus("offline"));
-    const unsubB = onSnapshot(FS.brands(),   snap => { if (snap.exists()) setBrands(snap.data().v);   }, () => setSyncStatus("offline"));
-    const unsubI = onSnapshot(FS.items(),    snap => { if (snap.exists()) setItems(snap.data().v);    }, () => setSyncStatus("offline"));
+    const unsubS = onSnapshot(FS.settings(), snap => { if (snap.exists()) setSettings(s => Object.assign({}, DEF_S, snap.data().v)); }, () => setSyncStatus("offline"));
+    const unsubB = onSnapshot(FS.brands(),   snap => { if (snap.exists()) setBrands(snap.data().v); }, () => setSyncStatus("offline"));
+    const unsubI = onSnapshot(FS.items(),    snap => { if (snap.exists()) setItems(snap.data().v);  }, () => setSyncStatus("offline"));
     return () => { unsubS(); unsubB(); unsubI(); };
   }, [ready]);
 
@@ -1033,7 +1140,7 @@ export default function App() {
       <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}input::placeholder{color:#CBD5E1;}button:active{opacity:0.75;transform:scale(0.97);}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}`}</style>
       <ToastHost />
       <div style={{ fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
-        {!role             && <Login       settings={settings} onLogin={setRole} />}
+        {!role               && <Login       settings={settings} onLogin={setRole} />}
         {role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} />}
         {role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} />}
       </div>
