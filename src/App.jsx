@@ -92,14 +92,14 @@ function computeItem(item, brand, settings) {
 
   function profitIncGST(price) {
     if (price == null || !ex || ex <= 0) return null;
-    const exRev = price / (1 + gst);
+    const exRev = price / (1 + gst);          // selling price ex-GST
     const amt   = +(exRev - ex).toFixed(2);
-    return { amt, pct: +((amt / ex) * 100).toFixed(1) };
+    return { amt, pct: +((amt / exRev) * 100).toFixed(1) }; // divide by selling price ex-GST
   }
   function profitExGST(price) {
     if (price == null || !ex || ex <= 0) return null;
     const amt = +(price - ex).toFixed(2);
-    return { amt, pct: +((amt / ex) * 100).toFixed(1) };
+    return { amt, pct: +((amt / price) * 100).toFixed(1) }; // divide by selling price
   }
 
   return {
