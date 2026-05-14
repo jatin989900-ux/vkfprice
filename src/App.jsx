@@ -608,6 +608,218 @@ function ExportModal({ items, brands, settings, onClose }) {
   );
 }
 
+// ── IMPORT MODAL ──────────────────────────────────────────────────
+function ImportModal({ brands, items, onItemsChange, onClose }) {
+  const [mode,    setMode]    = useState("merge");   // "merge" | "replace"
+  const [preview, setPreview] = useState(null);      // { rows, errors }
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef(null);
+
+  // Map a raw row (from xlsx or json) → item object
+  function rowToItem(row) {
+    const name = (row["Item Name"] || row["name"] || "").toString().trim();
+    if (!name) return null;
+    const pxRaw = parseFloat(row["Purchase Ex-GST"] || row["purchaseEx"] || 0);
+    if (!pxRaw || isNaN(pxRaw) || pxRaw <= 0) return null;
+
+    // GST — handle "5%" string or 0.05 number
+    let gst = 0.05;
+    const gstRaw = row["GST %"] || row["gst"];
+    if (gstRaw != null) {
+      const g = parseFloat(String(gstRaw).replace("%",""));
+      if (!isNaN(g)) gst = g > 1 ? g / 100 : g;
+    }
+
+    // Brand — match by code
+    const bCode = (row["Brand Code"] || row["bId"] || "").toString().trim().toUpperCase();
+    const brand = brands.find(b => b.code === bCode);
+    const bId   = brand ? brand.id : "";
+
+    // Category
+    const catRaw = (row["Category"] || row["cat"] || "").toString().trim();
+    const cat    = CATS.includes(catRaw) ? catRaw : "Other Items";
+
+    // Active
+    const statusRaw = (row["Status"] || row["active"] || "Active").toString().trim();
+    const active    = statusRaw === "Active" || statusRaw === "true" || statusRaw === true;
+
+    const now = new Date().toISOString();
+    return {
+      id:           uid(),
+      cat, bId, name,
+      purchaseEx:   pxRaw,
+      gst,
+      customRL:     "",
+      customDM:     "",
+      customRLPrice:"",
+      customDMPrice:"",
+      sdmAddon:     "",
+      plAddon:      "",
+      customAddon:  "",
+      active,
+      notes:        (row["Notes"] || row["notes"] || "").toString().trim(),
+      createdAt:    now,
+      updatedAt:    now,
+    };
+  }
+
+  function parseXLSX(file) {
+    return new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const wb   = XLSX.read(e.target.result, { type:"array" });
+          const ws   = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws);
+          res(rows);
+        } catch(err) { rej(err); }
+      };
+      reader.onerror = rej;
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function parseJSON(file) {
+    return new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const parsed = JSON.parse(e.target.result);
+          // support both raw array and { data: [...] } shape
+          res(Array.isArray(parsed) ? parsed : (parsed.data || []));
+        } catch(err) { rej(err); }
+      };
+      reader.onerror = rej;
+      reader.readAsText(file);
+    });
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    setLoading(true);
+    try {
+      const ext  = file.name.split(".").pop().toLowerCase();
+      const rows = ext === "json" ? await parseJSON(file) : await parseXLSX(file);
+      const good = []; const errors = [];
+      rows.forEach((r, i) => {
+        const item = rowToItem(r);
+        if (item) good.push(item);
+        else errors.push("Row " + (i+2) + ": skipped — missing name or purchase price");
+      });
+      setPreview({ rows:good, errors });
+    } catch(e) {
+      toast("Could not read file — check format","err");
+    }
+    setLoading(false);
+  }
+
+  function doImport() {
+    if (!preview || !preview.rows.length) return;
+    const now = new Date().toISOString();
+    if (mode === "replace") {
+      onItemsChange(preview.rows);
+      toast(preview.rows.length + " items imported (replaced all)");
+    } else {
+      // merge: match existing by name — update if found, add if new
+      const next = [...items];
+      let added = 0, updated = 0;
+      preview.rows.forEach(newItem => {
+        const idx = next.findIndex(x => x.name.toLowerCase() === newItem.name.toLowerCase());
+        if (idx >= 0) {
+          next[idx] = Object.assign({}, next[idx], newItem, { id:next[idx].id, createdAt:next[idx].createdAt, updatedAt:now });
+          updated++;
+        } else {
+          next.push(newItem);
+          added++;
+        }
+      });
+      onItemsChange(next);
+      toast(added + " added, " + updated + " updated");
+    }
+    onClose();
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div style={{ background:"#fff", borderRadius:20, padding:"22px 18px", maxWidth:420, width:"100%", maxHeight:"90vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <div style={{ fontSize:17, fontWeight:800 }}>⬆ Import Items</div>
+          <button onClick={onClose} style={{ width:32, height:32, borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:15, color:C.sec, fontFamily:"inherit" }}>✕</button>
+        </div>
+
+        {/* Format guide */}
+        <div style={{ background:"#F0F6FF", border:"1px solid "+C.dmBr, borderRadius:10, padding:"12px", marginBottom:14, fontSize:12, color:"#1E40AF", lineHeight:1.7 }}>
+          <strong>Accepted formats:</strong> Excel (.xlsx) or JSON (.json) exported from this app.<br />
+          Required columns: <strong>Item Name</strong>, <strong>Purchase Ex-GST</strong>.<br />
+          Optional: Category, Brand Code, GST %, Status, Notes.
+        </div>
+
+        {/* Import mode */}
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:C.sec, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:8 }}>Import Mode</div>
+          <div style={{ display:"flex", gap:8 }}>
+            {[
+              { v:"merge",   label:"Merge",   hint:"Add new · Update existing by name" },
+              { v:"replace", label:"Replace",  hint:"⚠ Delete all current items first" },
+            ].map(o => {
+              const on = mode === o.v;
+              return (
+                <button key={o.v} onClick={() => setMode(o.v)} style={{ flex:1, padding:"10px 8px", borderRadius:10, border:"1.5px solid "+(on?(o.v==="replace"?C.red:C.blue):C.border), background:on?(o.v==="replace"?C.redBg:"#EFF6FF"):"#F9FAFB", cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:on?(o.v==="replace"?C.red:C.blue):C.text }}>{o.label}</div>
+                  <div style={{ fontSize:10, color:on?(o.v==="replace"?C.red:C.blue):C.mute, marginTop:2 }}>{o.hint}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* File picker */}
+        <div style={{ marginBottom:14 }}>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.json" style={{ display:"none" }} onChange={e => handleFile(e.target.files[0])} />
+          <BtnO color={C.blue} onClick={() => { setPreview(null); fileRef.current && fileRef.current.click(); }}>
+            {loading ? "Reading file…" : "📂 Choose File (.xlsx or .json)"}
+          </BtnO>
+        </div>
+
+        {/* Preview */}
+        {preview && (
+          <div>
+            <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:10, padding:"12px", marginBottom:10 }}>
+              <div style={{ fontSize:13, fontWeight:800, color:C.profit, marginBottom:6 }}>
+                ✅ {preview.rows.length} item{preview.rows.length !== 1 ? "s" : ""} ready to import
+              </div>
+              {preview.rows.slice(0, 4).map((r, i) => (
+                <div key={i} style={{ fontSize:12, color:C.profit, padding:"3px 0", borderBottom:"1px solid #D1FAE5" }}>
+                  {r.name} — {fp(r.purchaseEx)} Ex-GST
+                </div>
+              ))}
+              {preview.rows.length > 4 && <div style={{ fontSize:11, color:C.mute, marginTop:4 }}>…and {preview.rows.length - 4} more</div>}
+            </div>
+            {preview.errors.length > 0 && (
+              <div style={{ background:C.redBg, border:"1px solid #FCA5A5", borderRadius:10, padding:"10px", marginBottom:10 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.red, marginBottom:4 }}>⚠ {preview.errors.length} row{preview.errors.length!==1?"s":""} skipped</div>
+                {preview.errors.slice(0,3).map((e,i) => <div key={i} style={{ fontSize:11, color:C.red }}>{e}</div>)}
+                {preview.errors.length > 3 && <div style={{ fontSize:11, color:C.mute }}>…and {preview.errors.length-3} more</div>}
+              </div>
+            )}
+            {mode === "replace" && (
+              <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"10px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
+                ⚠ Replace mode will permanently delete all {items.length} existing items and replace with the {preview.rows.length} imported items.
+              </div>
+            )}
+            <BtnP
+              color={mode === "replace" ? C.red : C.blue}
+              onClick={doImport}
+            >
+              {mode === "replace" ? "⚠ Replace All & Import" : "⬆ Import " + preview.rows.length + " Items"}
+            </BtnP>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── MASTER VIEW ───────────────────────────────────────────────────
 const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:"", customAddon:"", active:true, notes:"" };
 
@@ -615,7 +827,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   const [open, setOpen] = useState(false); const [eid, setEid] = useState(null);
   const [form, setForm] = useState(EI); const [errs, setErrs] = useState({});
   const [fCat, setFCat] = useState("All"); const [fSt, setFSt] = useState("Active");
-  const [conf, setConf] = useState(null); const [showExp, setShowExp] = useState(false);
+  const [conf, setConf] = useState(null); const [showExp, setShowExp] = useState(false); const [showImp, setShowImp] = useState(false);
 
   const brand  = brands.find(b => b.id === form.bId) || null;
   const prevEx = parseFloat(form.purchaseEx) || 0;
@@ -672,6 +884,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
     <div style={{ padding:"16px 16px 80px" }}>
       {conf && <Confirm title="Delete Item?" msg="This will permanently remove the item." onOk={() => del(conf)} onNo={() => setConf(null)} />}
       {showExp && <ExportModal items={items} brands={brands} settings={settings} onClose={() => setShowExp(false)} />}
+      {showImp && <ImportModal items={items} brands={brands} onItemsChange={onItemsChange} onClose={() => setShowImp(false)} />}
       <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"9px 13px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
         ⚠ Purchase WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
       </div>
@@ -683,9 +896,10 @@ function MasterView({ brands, items, onItemsChange, settings }) {
           {["All","Active","Inactive"].map(s => <button key={s} onClick={() => setFSt(s)} style={{ padding:"9px 11px", border:"none", cursor:"pointer", fontWeight:600, fontSize:12, fontFamily:"inherit", background:fSt===s?C.blue:"#fff", color:fSt===s?"#fff":C.sec }}>{s}</button>)}
         </div>
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:8, marginBottom:12 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr", gap:8, marginBottom:12 }}>
         <BtnP onClick={openAdd}>+ Add Item</BtnP>
         <BtnO color={C.blue} onClick={() => setShowExp(true)}>⬇ Export</BtnO>
+        <BtnO color={C.rl}   onClick={() => setShowImp(true)}>⬆ Import</BtnO>
       </div>
       <div style={{ fontSize:12, color:C.mute, marginBottom:10, fontWeight:600 }}>{list.length + " item" + (list.length !== 1 ? "s" : "")}</div>
       {list.length === 0 && <div style={{ textAlign:"center", padding:"36px", color:C.mute, fontSize:14 }}>No items. Add using the button above.</div>}
