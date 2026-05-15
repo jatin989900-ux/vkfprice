@@ -336,9 +336,12 @@ function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick 
       </div>
 
       {isAdmin && (
-        <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:8, padding:"7px 11px", marginBottom:9, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:11, fontWeight:700, color:C.amb, textTransform:"uppercase" }}>Purchase Ex-GST</span>
-          <span style={{ fontWeight:800, fontSize:13, color:C.amb }}>{fp(it.purchaseEx) + " + "}<span style={{ fontSize:10, fontWeight:600 }}>{(it.gst * 100).toFixed(0) + "% = " + fp(it.incGST)}</span></span>
+        <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:8, padding:"7px 11px", marginBottom:9 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <span style={{ fontSize:11, fontWeight:700, color:C.amb, textTransform:"uppercase" }}>Purchase Ex-GST</span>
+            <span style={{ fontWeight:800, fontSize:13, color:C.amb }}>{fp(it.purchaseEx) + " + "}<span style={{ fontSize:10, fontWeight:600 }}>{(it.gst * 100).toFixed(0) + "% = " + fp(it.incGST)}</span></span>
+          </div>
+          {it.purchaseDate && <div style={{ fontSize:10, color:C.amb, marginTop:3, fontWeight:600 }}>📅 Purchased: {fmtDate(it.purchaseDate)}</div>}
         </div>
       )}
 
@@ -481,7 +484,7 @@ function Login({ settings, onLogin }) {
           </div>
         )}
       </div>
-      <div style={{ marginTop:16, fontSize:11, color:"rgba(255,255,255,0.25)" }}>{"v" + VER + " · Firebase sync"}</div>
+      <div style={{ marginTop:16, fontSize:11, color:"rgba(255,255,255,0.25)" }}>{"v" + VER}</div>
     </div>
   );
 }
@@ -821,12 +824,14 @@ function ImportModal({ brands, items, onItemsChange, onClose }) {
 }
 
 // ── MASTER VIEW ───────────────────────────────────────────────────
-const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:"", customAddon:"", active:true, notes:"" };
+function todayISO() { const d = new Date(); return d.toISOString().slice(0,10); }
+const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:"", customAddon:"", purchaseDate:"", active:true, notes:"" };
 
 function MasterView({ brands, items, onItemsChange, settings }) {
   const [open, setOpen] = useState(false); const [eid, setEid] = useState(null);
   const [form, setForm] = useState(EI); const [errs, setErrs] = useState({});
   const [fCat, setFCat] = useState("All"); const [fSt, setFSt] = useState("Active");
+  const [search, setSearch] = useState("");
   const [conf, setConf] = useState(null); const [showExp, setShowExp] = useState(false); const [showImp, setShowImp] = useState(false);
 
   const brand  = brands.find(b => b.id === form.bId) || null;
@@ -836,7 +841,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   function close() { setOpen(false); setEid(null); }
   function openAdd() { setForm(EI); setEid(null); setErrs({}); setOpen(true); }
   function openEdit(it) {
-    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"" }));
+    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", purchaseDate:it.purchaseDate||"" }));
     setEid(it.id); setErrs({}); setOpen(true);
   }
   function validate() {
@@ -857,7 +862,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
     if (!validate()) return;
     const now = new Date().toISOString();
     const orig = eid ? items.find(i => i.id === eid) : null;
-    const entry = Object.assign({}, form, { id:eid||uid(), purchaseEx:parseFloat(form.purchaseEx), gst:parseFloat(form.gst), createdAt:orig?(orig.createdAt||now):now, updatedAt:now });
+    const entry = Object.assign({}, form, { id:eid||uid(), purchaseEx:parseFloat(form.purchaseEx), gst:parseFloat(form.gst), purchaseDate:form.purchaseDate||todayISO(), createdAt:orig?(orig.createdAt||now):now, updatedAt:now });
     onItemsChange(eid ? items.map(i => i.id===eid?entry:i) : [...items, entry]);
     toast(eid ? "Item updated" : "Item added"); close();
   }
@@ -869,9 +874,14 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       if (fCat !== "All" && i.cat !== fCat) return false;
       if (fSt === "Active" && !i.active) return false;
       if (fSt === "Inactive" && i.active) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        const b = brands.find(x => x.id===i.bId);
+        if (!i.name.toLowerCase().includes(q) && !(b&&b.name.toLowerCase().includes(q)) && !(b&&b.code.toLowerCase().includes(q))) return false;
+      }
       return true;
     }).map(i => { const b = brands.find(x => x.id===i.bId)||null; return Object.assign({}, i, computeItem(i,b,settings), {_b:b}); });
-  }, [items, brands, settings, fCat, fSt]);
+  }, [items, brands, settings, fCat, fSt, search]);
 
   function ei(k) { return errs[k] ? Object.assign({}, INP, { borderColor:C.red }) : INP; }
   const rlSrc = fpctRaw(form.customRL) ? "override ("+fpctRaw(form.customRL)+")" : brand ? "brand "+brand.code+" ("+(brand.rlMarkup*100).toFixed(0)+"%)" : "default ("+(settings.defaultRL*100).toFixed(0)+"%)";
@@ -888,6 +898,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"9px 13px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
         ⚠ Purchase WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
       </div>
+      <input style={Object.assign({},INP,{marginBottom:10})} placeholder="🔍 Search by item or brand..." value={search} onChange={e => setSearch(e.target.value)} />
       <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
         <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fCat} onChange={e => setFCat(e.target.value)}>
           <option value="All">All Categories</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}
@@ -934,6 +945,12 @@ function MasterView({ brands, items, onItemsChange, settings }) {
             {GST_OPTS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
           </select>
           {prevEx > 0 && <div style={{ marginTop:4, fontSize:12, color:C.amb, fontWeight:600 }}>Purchase Inc-GST = {fp(calcIncGST(prevEx, form.gst))}</div>}
+        </Fld>
+        <Fld label="Purchase Date" hint={form.purchaseDate ? "" : "Defaults to today if left blank"}>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            <input style={Object.assign({},INP,{flex:1})} type="date" value={form.purchaseDate} onChange={e => setForm(p => ({...p,purchaseDate:e.target.value}))} />
+            {form.purchaseDate && <button onClick={() => setForm(p => ({...p,purchaseDate:""}))} style={{ padding:"8px 12px", borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:12, color:C.sec, fontFamily:"inherit", whiteSpace:"nowrap" }}>Reset to today</button>}
+          </div>
         </Fld>
         {/* RL */}
         <div style={{ background:"#F8FDF9", border:"1px solid "+C.rlBr, borderRadius:11, padding:"12px", marginBottom:14 }}>
@@ -1071,7 +1088,7 @@ function PriceListView({ brands, items, settings, isAdmin }) {
       <div style={{ background:C.navy, borderRadius:13, padding:"15px", marginBottom:12, color:"#fff" }}>
         <div style={{ fontWeight:800, fontSize:17 }}>{settings.co}</div>
         <div style={{ fontSize:11, color:"rgba(255,255,255,0.5)", marginTop:2 }}>{settings.tag}</div>
-        <div style={{ marginTop:8, fontSize:11, color:"rgba(255,255,255,0.35)" }}>{"Price List · " + today + " · RL/DM/PL inc-GST · SDM ex-GST"}</div>
+        <div style={{ marginTop:8, fontSize:11, color:"rgba(255,255,255,0.35)" }}>{"Price List · " + today}</div>
       </div>
 
       <div style={{ display:"flex", border:"1px solid "+C.border, borderRadius:10, overflow:"hidden", marginBottom:14 }}>
@@ -1126,21 +1143,11 @@ function PriceListView({ brands, items, settings, isAdmin }) {
           )}
           {priceFilter !== "all" && (
             <div style={{ fontSize:11, marginTop:4, color:PRICE_FILTERS.find(f=>f.id===priceFilter).col, fontWeight:600 }}>
-              {priceFilter === "rl"  && "Showing RL — Wholesale prices (Inc-GST)"}
-              {priceFilter === "dm"  && "Showing DM — Special Wholesale prices (Inc-GST)"}
-              {priceFilter === "pl"  && "Showing PL — Retail prices (Inc-GST)"}
-              {priceFilter === "sdm" && "Showing SDM — Ex-GST prices (customer pays + GST on top)"}
+              {priceFilter === "sdm" && "Prices shown Ex-GST — customer pays + GST on top"}
             </div>
           )}
         </div>
-      ) : (
-        <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap" }}>
-          <div style={{ fontSize:11, fontWeight:700, color:C.rl  }}>🟢 RL = Wholesale (Inc-GST)</div>
-          <div style={{ fontSize:11, fontWeight:700, color:C.dm  }}>🔵 DM = Sp. WHL (Inc-GST)</div>
-          <div style={{ fontSize:11, fontWeight:700, color:C.pl  }}>🟣 PL = Retail (Inc-GST)</div>
-          <div style={{ fontSize:11, fontWeight:700, color:C.sdm }}>🟠 SDM = Ex-GST (+ GST extra)</div>
-        </div>
-      )}
+      ) : null}
 
       <div style={{ fontSize:12, color:C.mute, marginBottom:10, fontWeight:600 }}>{filtered.length + " items"}</div>
 
@@ -1223,7 +1230,7 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
   return (
     <div style={{ padding:"16px 16px 80px" }}>
       <div style={Object.assign({},SS,{display:"flex",alignItems:"center",justifyContent:"space-between"})}>
-        <div><div style={{ fontSize:13, fontWeight:800, marginBottom:4 }}>☁️ Firebase Sync</div><div style={{ fontSize:11, color:C.mute }}>All devices share one database</div></div>
+        <div><div style={{ fontSize:13, fontWeight:800, marginBottom:4 }}>☁️ Cloud Sync</div><div style={{ fontSize:11, color:C.mute }}>All devices share one database</div></div>
         <SyncBadge status={syncStatus} />
       </div>
       <div style={SS}>
@@ -1257,7 +1264,7 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
         </div>
       ))}
       <div style={Object.assign({},SS,{textAlign:"center"})}>
-        <div style={{ fontSize:13, color:C.sec, lineHeight:1.7 }}>{"v" + VER + " · Firebase Firestore"}</div>
+        <div style={{ fontSize:13, color:C.sec, lineHeight:1.7 }}>{"v" + VER}</div>
         <div style={{ fontSize:12, color:C.mute, marginTop:4 }}>Data syncs automatically across all devices</div>
       </div>
     </div>
@@ -1344,7 +1351,7 @@ export default function App() {
     <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
       <div style={{ textAlign:"center" }}>
         <div style={{ width:52, height:52, borderRadius:14, background:C.navy, display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:900, fontSize:20, margin:"0 auto 10px" }}>VK</div>
-        <div style={{ color:C.sec, fontSize:13 }}>Connecting to Firebase…</div>
+        <div style={{ color:C.sec, fontSize:13 }}>Loading…</div>
       </div>
     </div>
   );
