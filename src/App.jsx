@@ -839,9 +839,9 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   const prev   = prevEx > 0 ? computeItem(Object.assign({}, form, { purchaseEx:prevEx }), brand, settings) : null;
 
   function close() { setOpen(false); setEid(null); }
-  function openAdd() { setForm(EI); setEid(null); setErrs({}); setOpen(true); }
+  function openAdd() { setForm(Object.assign({},EI,{_sigRL:""})); setEid(null); setErrs({}); setOpen(true); }
   function openEdit(it) {
-    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", purchaseDate:it.purchaseDate||"" }));
+    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", purchaseDate:it.purchaseDate||"", _sigRL:"" }));
     setEid(it.id); setErrs({}); setOpen(true);
   }
   function validate() {
@@ -944,8 +944,28 @@ function MasterView({ brands, items, onItemsChange, settings }) {
         <Fld label="Item Name *" err={errs.name || (isDuplicate ? "Item already exists — duplicate name not allowed" : "")}>
           <input style={Object.assign({},ei("name"),{borderColor:isDuplicate?C.red:errs.name?C.red:C.border})} value={form.name} placeholder="e.g. King Cotton Bedsheet 200TC" onChange={e => setForm(p => ({...p,name:e.target.value}))} />
         </Fld>
+        {/* Signature brand: reverse-calculate purchase price from RL inc-GST */}
+        {brand && brand.name.toLowerCase().includes("signature") && (
+          <div style={{ background:"#FFF7ED", border:"1px solid #FDBA74", borderRadius:11, padding:"12px", marginBottom:14 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:"#C2410C", textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>🧮 Signature — Calculate Purchase from RL Price</div>
+            <div style={{ fontSize:11, color:"#C2410C", marginBottom:10 }}>Enter the RL price (Inc-GST) → purchase price is auto-filled as RL × 86%</div>
+            <Fld label="RL Price Inc-GST (₹)" hint={(() => { const v = parseFloat(form._sigRL); return (!isNaN(v)&&v>0) ? "Purchase Ex-GST = " + fp(+(v*0.86).toFixed(2)) : "e.g. 1000 → purchase = ₹860"; })()}>
+              <input
+                style={Object.assign({},INP,{fontWeight:700,fontSize:16,color:"#C2410C",borderColor:"#FDBA74"})}
+                type="number" step="1" min="0"
+                placeholder="e.g. 1000"
+                value={form._sigRL||""}
+                onChange={e => {
+                  const v = parseFloat(e.target.value);
+                  const px = (!isNaN(v)&&v>0) ? (+(v*0.86).toFixed(2)).toString() : "";
+                  setForm(p => ({...p, _sigRL:e.target.value, purchaseEx:px}));
+                }}
+              />
+            </Fld>
+          </div>
+        )}
         <Fld label="Purchase Price WITHOUT GST (₹) *" err={errs.px}>
-          <input style={Object.assign({},ei("px"),{fontWeight:700,fontSize:16,color:C.blue})} type="number" step="0.01" placeholder="e.g. 380" value={form.purchaseEx} onChange={e => setForm(p => ({...p,purchaseEx:e.target.value}))} />
+          <input style={Object.assign({},ei("px"),{fontWeight:700,fontSize:16,color:C.blue})} type="number" step="0.01" placeholder="e.g. 380" value={form.purchaseEx} onChange={e => setForm(p => ({...p,purchaseEx:e.target.value, _sigRL:""}))} />
         </Fld>
         <Fld label="GST % *" hint="Default 5% for textiles.">
           <select style={SEL} value={form.gst} onChange={e => setForm(p => ({...p,gst:parseFloat(e.target.value)}))}>
