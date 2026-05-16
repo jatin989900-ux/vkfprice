@@ -859,6 +859,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
     return Object.keys(e).length === 0;
   }
   function save() {
+    if (isDuplicate) return toast("Item already exists — use a unique name","err");
     if (!validate()) return;
     const now = new Date().toISOString();
     const orig = eid ? items.find(i => i.id === eid) : null;
@@ -880,8 +881,12 @@ function MasterView({ brands, items, onItemsChange, settings }) {
         if (!i.name.toLowerCase().includes(q) && !(b&&b.name.toLowerCase().includes(q)) && !(b&&b.code.toLowerCase().includes(q))) return false;
       }
       return true;
-    }).map(i => { const b = brands.find(x => x.id===i.bId)||null; return Object.assign({}, i, computeItem(i,b,settings), {_b:b}); });
+    }).map(i => { const b = brands.find(x => x.id===i.bId)||null; return Object.assign({}, i, computeItem(i,b,settings), {_b:b}); })
+      .sort((a,b) => new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
   }, [items, brands, settings, fCat, fSt, search]);
+
+  // Real-time duplicate check — exclude current item when editing
+  const isDuplicate = form.name.trim() !== "" && items.some(i => i.name.trim().toLowerCase() === form.name.trim().toLowerCase() && i.id !== eid);
 
   function ei(k) { return errs[k] ? Object.assign({}, INP, { borderColor:C.red }) : INP; }
   const rlSrc = fpctRaw(form.customRL) ? "override ("+fpctRaw(form.customRL)+")" : brand ? "brand "+brand.code+" ("+(brand.rlMarkup*100).toFixed(0)+"%)" : "default ("+(settings.defaultRL*100).toFixed(0)+"%)";
@@ -926,7 +931,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       ))}
 
       <Drawer open={open} onClose={close} title={eid ? "Edit Item" : "Add Item"}
-        footer={<div style={{ display:"flex", gap:9 }}><BtnO onClick={close}>Cancel</BtnO><BtnP color={eid?"#F59E0B":C.blue} onClick={save}>{eid ? "Update Item" : "Save Item"}</BtnP></div>}>
+        footer={<div style={{ display:"flex", gap:9 }}><BtnO onClick={close}>Cancel</BtnO><BtnP color={isDuplicate?"#9CA3AF":eid?"#F59E0B":C.blue} onClick={save}>{eid ? "Update Item" : "Save Item"}</BtnP></div>}>
         <Fld label="Category *"><select style={SEL} value={form.cat} onChange={e => setForm(p => ({...p,cat:e.target.value,bId:""}))}>
           {CATS.map(c => <option key={c} value={c}>{c}</option>)}
         </select></Fld>
@@ -936,7 +941,9 @@ function MasterView({ brands, items, onItemsChange, settings }) {
         </select>
         {brand && <div style={{ marginTop:4, display:"flex", gap:6 }}><Chip col={C.rl} bg={C.rlBg} br={C.rlBr}>{"RL " + fpct(brand.rlMarkup)}</Chip>{brand.dmMarkup!=null?<Chip col={C.dm} bg={C.dmBg} br={C.dmBr}>{"DM " + fpct(brand.dmMarkup)}</Chip>:<Chip col={C.mute} bg="#F9FAFB" br={C.border}>DM not set</Chip>}</div>}
         </Fld>
-        <Fld label="Item Name *" err={errs.name}><input style={ei("name")} value={form.name} placeholder="e.g. King Cotton Bedsheet 200TC" onChange={e => setForm(p => ({...p,name:e.target.value}))} /></Fld>
+        <Fld label="Item Name *" err={errs.name || (isDuplicate ? "Item already exists — duplicate name not allowed" : "")}>
+          <input style={Object.assign({},ei("name"),{borderColor:isDuplicate?C.red:errs.name?C.red:C.border})} value={form.name} placeholder="e.g. King Cotton Bedsheet 200TC" onChange={e => setForm(p => ({...p,name:e.target.value}))} />
+        </Fld>
         <Fld label="Purchase Price WITHOUT GST (₹) *" err={errs.px}>
           <input style={Object.assign({},ei("px"),{fontWeight:700,fontSize:16,color:C.blue})} type="number" step="0.01" placeholder="e.g. 380" value={form.purchaseEx} onChange={e => setForm(p => ({...p,purchaseEx:e.target.value}))} />
         </Fld>
