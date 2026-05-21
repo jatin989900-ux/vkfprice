@@ -29,7 +29,7 @@ async function fsSave(key, value) {
 }
 
 // ── CONSTANTS ─────────────────────────────────────────────────────
-const VER  = "4.3";
+const VER  = "4.4";
 const CATS = ["Bed Sheets","Comforters","Comforter Sets","Towels","Pillows","Dohars","Blankets","Top Sheets","Other Items"];
 const GST_OPTS = [{ label:"5% — Default (Textiles)", v:0.05 },{ label:"12%", v:0.12 },{ label:"18%", v:0.18 }];
 const ADDON_OPTS = [
@@ -116,7 +116,7 @@ function computeItem(item, brand, settings) {
 
 // ── DEFAULTS ──────────────────────────────────────────────────────
 // sdmPIN added
-const DEF_S = { co:"VK Furnishing", tag:"Wholesale Bedding & Textiles, Delhi NCR", defaultRL:0.18, defaultDM:null, adminPIN:"1234", salesPIN:"0000", sdmPIN:"9999" };
+const DEF_S = { co:"VK Furnishing", tag:"Wholesale Bedding & Textiles, Delhi NCR", defaultRL:0.18, defaultDM:null, adminPIN:"1234", salesPIN:"0000", sdmPIN:"9999", categories:CATS.slice() };
 const DEF_B = [
   { id:"b1", code:"TRI", name:"Trident",      rlMarkup:0.22, dmMarkup:null },
   { id:"b2", code:"STH", name:"Story@Home",   rlMarkup:0.18, dmMarkup:null },
@@ -125,9 +125,9 @@ const DEF_B = [
 ];
 const T0 = new Date().toISOString();
 const DEF_I = [
-  { id:"i1", cat:"Bed Sheets", bId:"b1", name:"King Cotton Bedsheet 200TC",    purchaseEx:380, gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:300,  customAddon:"", active:true, notes:"", createdAt:T0, updatedAt:T0 },
-  { id:"i2", cat:"Comforters", bId:"b2", name:"Winter Hollow Fibre Comforter", purchaseEx:550, gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:500,  customAddon:"", active:true, notes:"", createdAt:T0, updatedAt:T0 },
-  { id:"i3", cat:"Towels",     bId:"b3", name:"Premium Bath Towel 500 GSM",    purchaseEx:180, gst:0.18, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:200,  customAddon:"", active:true, notes:"", createdAt:T0, updatedAt:T0 },
+  { id:"i1", cat:"Bed Sheets", bId:"b1", name:"King Cotton Bedsheet 200TC",    purchaseEx:380, gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:300,  customAddon:"", purchaseDate:"", purchaseHistory:[], active:true, notes:"", createdAt:T0, updatedAt:T0 },
+  { id:"i2", cat:"Comforters", bId:"b2", name:"Winter Hollow Fibre Comforter", purchaseEx:550, gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:500,  customAddon:"", purchaseDate:"", purchaseHistory:[], active:true, notes:"", createdAt:T0, updatedAt:T0 },
+  { id:"i3", cat:"Towels",     bId:"b3", name:"Premium Bath Towel 500 GSM",    purchaseEx:180, gst:0.18, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:200,  customAddon:"", purchaseDate:"", purchaseHistory:[], active:true, notes:"", createdAt:T0, updatedAt:T0 },
 ];
 
 // ── HELPERS ───────────────────────────────────────────────────────
@@ -591,7 +591,7 @@ function ExportModal({ items, brands, settings, onClose }) {
         </div>
         <div style={{ background:"#F8FAFF", border:"1px solid #BFDBFE", borderRadius:10, padding:"13px", marginBottom:14 }}>
           <div style={{ fontSize:11, fontWeight:700, color:C.blue, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:10 }}>Filter Items</div>
-          <Fld label="Category"><select style={SEL} value={fCat} onChange={e => setFCat(e.target.value)}><option value="All">All Categories</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}</select></Fld>
+          <Fld label="Category"><select style={SEL} value={fCat} onChange={e => setFCat(e.target.value)}><option value="All">All Categories</option>{(settings.categories||CATS).map(c => <option key={c} value={c}>{c}</option>)}</select></Fld>
           <Fld label="Brand"><select style={SEL} value={fBrand} onChange={e => setFBrand(e.target.value)}><option value="All">All Brands</option>{brands.map(b => <option key={b.id} value={b.id}>{b.code+" — "+b.name}</option>)}</select></Fld>
           <Fld label="Status"><div style={{ display:"flex", border:"1px solid "+C.border, borderRadius:9, overflow:"hidden" }}>{["All","Active","Inactive"].map(s => <button key={s} onClick={() => setFSt(s)} style={{ flex:1, padding:"9px", border:"none", cursor:"pointer", fontWeight:600, fontSize:12, fontFamily:"inherit", background:fSt===s?C.blue:"#fff", color:fSt===s?"#fff":C.sec }}>{s}</button>)}</div></Fld>
           <div style={{ fontSize:12, color:C.mute, fontWeight:600 }}>{filtered.length + " items selected"}</div>
@@ -611,8 +611,44 @@ function ExportModal({ items, brands, settings, onClose }) {
   );
 }
 
+// ── PURCHASE HISTORY MODAL ────────────────────────────────────────
+function PurchaseHistoryModal({ item, onClose }) {
+  const history = (item.purchaseHistory || []).slice().reverse(); // newest first
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div style={{ background:"#fff", borderRadius:20, padding:"22px 18px", maxWidth:380, width:"100%", maxHeight:"80vh", display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+          <div style={{ fontSize:17, fontWeight:800 }}>📅 Purchase History</div>
+          <button onClick={onClose} style={{ width:32, height:32, borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:15, color:C.sec, fontFamily:"inherit" }}>✕</button>
+        </div>
+        <div style={{ fontSize:12, color:C.sec, marginBottom:16, fontWeight:600 }}>{item.name}</div>
+        {history.length === 0 ? (
+          <div style={{ textAlign:"center", padding:"36px 0", color:C.mute, fontSize:14 }}>
+            No history yet. History builds from the next price update.
+          </div>
+        ) : (
+          <div style={{ overflowY:"auto", flex:1 }}>
+            {history.map((h, i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"11px 14px", background:i===0?C.ambBg:"#F9FAFB", border:"1px solid "+(i===0?"#FCD34D":C.border), borderRadius:10, marginBottom:8 }}>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:800, color:i===0?C.amb:C.text }}>{fp(h.price)}</div>
+                  <div style={{ fontSize:10, color:C.mute, marginTop:2 }}>Recorded: {fmtDate(h.recordedAt)}</div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:i===0?C.amb:C.sec }}>{fmtDate(h.date)}</div>
+                  {i === 0 && <div style={{ fontSize:10, color:C.amb, marginTop:2 }}>Latest</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── IMPORT MODAL ──────────────────────────────────────────────────
-function ImportModal({ brands, items, onItemsChange, onClose }) {
+function ImportModal({ brands, items, onItemsChange, onClose, cats }) {
   const [mode,    setMode]    = useState("merge");   // "merge" | "replace"
   const [preview, setPreview] = useState(null);      // { rows, errors }
   const [loading, setLoading] = useState(false);
@@ -640,7 +676,8 @@ function ImportModal({ brands, items, onItemsChange, onClose }) {
 
     // Category
     const catRaw = (row["Category"] || row["cat"] || "").toString().trim();
-    const cat    = CATS.includes(catRaw) ? catRaw : "Other Items";
+    const catList = cats || CATS;
+    const cat    = catList.includes(catRaw) ? catRaw : catList[0] || "Other Items";
 
     // Active
     const statusRaw = (row["Status"] || row["active"] || "Active").toString().trim();
@@ -833,6 +870,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   const [fCat, setFCat] = useState("All"); const [fSt, setFSt] = useState("Active");
   const [search, setSearch] = useState("");
   const [conf, setConf] = useState(null); const [showExp, setShowExp] = useState(false); const [showImp, setShowImp] = useState(false);
+  const [historyItem, setHistoryItem] = useState(null);
 
   const brand  = brands.find(b => b.id === form.bId) || null;
   const prevEx = parseFloat(form.purchaseEx) || 0;
@@ -863,7 +901,16 @@ function MasterView({ brands, items, onItemsChange, settings }) {
     if (!validate()) return;
     const now = new Date().toISOString();
     const orig = eid ? items.find(i => i.id === eid) : null;
-    const entry = Object.assign({}, form, { id:eid||uid(), purchaseEx:parseFloat(form.purchaseEx), gst:parseFloat(form.gst), purchaseDate:form.purchaseDate||todayISO(), createdAt:orig?(orig.createdAt||now):now, updatedAt:now });
+    const newPx = parseFloat(form.purchaseEx);
+    const oldPx = orig ? parseFloat(orig.purchaseEx) : null;
+    const pDate = form.purchaseDate || todayISO();
+    // Append to purchaseHistory if price changed or new item
+    const prevHistory = (orig && orig.purchaseHistory) ? orig.purchaseHistory : [];
+    const priceChanged = !orig || oldPx !== newPx;
+    const newHistory = priceChanged
+      ? [...prevHistory, { price:newPx, date:pDate, recordedAt:now }]
+      : prevHistory;
+    const entry = Object.assign({}, form, { id:eid||uid(), purchaseEx:newPx, gst:parseFloat(form.gst), purchaseDate:pDate, purchaseHistory:newHistory, createdAt:orig?(orig.createdAt||now):now, updatedAt:now });
     onItemsChange(eid ? items.map(i => i.id===eid?entry:i) : [...items, entry]);
     toast(eid ? "Item updated" : "Item added"); close();
   }
@@ -889,6 +936,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   const isDuplicate = form.name.trim() !== "" && items.some(i => i.name.trim().toLowerCase() === form.name.trim().toLowerCase() && i.id !== eid);
 
   function ei(k) { return errs[k] ? Object.assign({}, INP, { borderColor:C.red }) : INP; }
+  const cats = (settings.categories && settings.categories.length > 0) ? settings.categories : CATS;
   const rlSrc = fpctRaw(form.customRL) ? "override ("+fpctRaw(form.customRL)+")" : brand ? "brand "+brand.code+" ("+(brand.rlMarkup*100).toFixed(0)+"%)" : "default ("+(settings.defaultRL*100).toFixed(0)+"%)";
   const dmSrc = fpctRaw(form.customDM) ? "override ("+fpctRaw(form.customDM)+")" : brand&&brand.dmMarkup!=null ? "brand "+brand.code+" ("+(brand.dmMarkup*100).toFixed(0)+"%)" : settings.defaultDM ? "default ("+(parseFloat(settings.defaultDM)*100).toFixed(0)+"%)" : "not set";
   const rlPriceLocked = form.customRLPrice !== "" && form.customRLPrice != null && !isNaN(parseFloat(form.customRLPrice)) && parseFloat(form.customRLPrice) > 0;
@@ -899,14 +947,15 @@ function MasterView({ brands, items, onItemsChange, settings }) {
     <div style={{ padding:"16px 16px 80px" }}>
       {conf && <Confirm title="Delete Item?" msg="This will permanently remove the item." onOk={() => del(conf)} onNo={() => setConf(null)} />}
       {showExp && <ExportModal items={items} brands={brands} settings={settings} onClose={() => setShowExp(false)} />}
-      {showImp && <ImportModal items={items} brands={brands} onItemsChange={onItemsChange} onClose={() => setShowImp(false)} />}
+      {showImp && <ImportModal items={items} brands={brands} onItemsChange={onItemsChange} onClose={() => setShowImp(false)} cats={cats} />}
+      {historyItem && <PurchaseHistoryModal item={historyItem} onClose={() => setHistoryItem(null)} />}
       <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"9px 13px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
         ⚠ Purchase WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
       </div>
       <input style={Object.assign({},INP,{marginBottom:10})} placeholder="🔍 Search by item or brand..." value={search} onChange={e => setSearch(e.target.value)} />
       <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
         <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fCat} onChange={e => setFCat(e.target.value)}>
-          <option value="All">All Categories</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="All">All Categories</option>{cats.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <div style={{ display:"flex", border:"1px solid "+C.border, borderRadius:9, overflow:"hidden" }}>
           {["All","Active","Inactive"].map(s => <button key={s} onClick={() => setFSt(s)} style={{ padding:"9px 11px", border:"none", cursor:"pointer", fontWeight:600, fontSize:12, fontFamily:"inherit", background:fSt===s?C.blue:"#fff", color:fSt===s?"#fff":C.sec }}>{s}</button>)}
@@ -924,6 +973,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
           <ItemCard it={it} isAdmin showDate sdmUnlocked={true} />
           <div style={{ display:"flex", gap:8, marginTop:-4, marginBottom:8 }}>
             <button onClick={() => openEdit(it)} style={{ flex:1, padding:"9px", borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:13, fontWeight:600, color:C.sec, fontFamily:"inherit" }}>Edit</button>
+            <button onClick={() => setHistoryItem(it)} style={{ padding:"9px 11px", borderRadius:8, border:"1.5px solid "+C.dmBr, background:C.dmBg, cursor:"pointer", fontSize:12, fontWeight:600, color:C.dm, fontFamily:"inherit" }}>📅</button>
             <button onClick={() => toggle(it.id)} style={{ flex:1, padding:"9px", borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:12, fontWeight:600, color:it.active?"#991B1B":"#065F46", fontFamily:"inherit" }}>{it.active ? "Set Inactive" : "Set Active"}</button>
             <button onClick={() => setConf(it.id)} style={{ width:40, borderRadius:8, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:15, color:C.red, fontFamily:"inherit" }}>✕</button>
           </div>
@@ -933,7 +983,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       <Drawer open={open} onClose={close} title={eid ? "Edit Item" : "Add Item"}
         footer={<div style={{ display:"flex", gap:9 }}><BtnO onClick={close}>Cancel</BtnO><BtnP color={isDuplicate?"#9CA3AF":eid?"#F59E0B":C.blue} onClick={save}>{eid ? "Update Item" : "Save Item"}</BtnP></div>}>
         <Fld label="Category *"><select style={SEL} value={form.cat} onChange={e => setForm(p => ({...p,cat:e.target.value,bId:""}))}>
-          {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+          {cats.map(c => <option key={c} value={c}>{c}</option>)}
         </select></Fld>
         <Fld label="Brand"><select style={SEL} value={form.bId} onChange={e => setForm(p => ({...p,bId:e.target.value}))}>
           <option value="">— Select Brand (optional) —</option>
@@ -1137,7 +1187,7 @@ function PriceListView({ brands, items, settings, isAdmin }) {
 
       <div style={{ display:"flex", gap:8, marginBottom:12 }}>
         <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fCat} onChange={e => setFCat(e.target.value)}>
-          <option value="All">All Categories</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="All">All Categories</option>{(settings.categories||CATS).map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fBrand} onChange={e => setFBrand(e.target.value)}>
           <option value="All">All Brands</option>{brands.map(b => <option key={b.id} value={b.id}>{b.code+" — "+b.name}</option>)}
@@ -1226,6 +1276,7 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
   const [nAP,setNAP]=useState(""); const [cAP,setCAP]=useState("");
   const [nSP,setNSP]=useState(""); const [cSP,setCSP]=useState("");
   const [nSDM,setNSDM]=useState(""); const [cSDM,setCSDM]=useState("");
+  const [newCat, setNewCat] = useState("");
 
   function saveGen() {
     if (!form.co.trim()) return toast("Company name required","err");
@@ -1267,6 +1318,34 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
         <Fld label="Default RL Markup %" hint="18 = 18%"><input style={INP} type="number" step="0.5" value={form.defaultRL} onChange={e => setForm(p => ({...p,defaultRL:e.target.value}))} /></Fld>
         <Fld label="Default DM Markup %" hint="Leave blank if not decided."><input style={INP} type="number" step="0.5" placeholder="Leave blank" value={form.defaultDM} onChange={e => setForm(p => ({...p,defaultDM:e.target.value}))} /></Fld>
         <BtnP onClick={saveGen}>Save Settings</BtnP>
+      </div>
+      {/* Categories */}
+      <div style={SS}>
+        <div style={{ fontSize:14, fontWeight:800, marginBottom:4 }}>Categories</div>
+        <div style={{ fontSize:11, color:C.mute, marginBottom:14 }}>Add or remove product categories. Used in all item dropdowns.</div>
+        {(settings.categories||CATS).map((cat, i) => (
+          <div key={cat} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 12px", background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:8, marginBottom:7 }}>
+            <span style={{ fontSize:13, fontWeight:600, color:C.text }}>{cat}</span>
+            <button onClick={() => {
+              const next = (settings.categories||CATS).filter(c => c !== cat);
+              if (next.length === 0) return toast("Must keep at least one category","warn");
+              onSettingsChange({ ...settings, categories:next });
+              toast("Category removed","warn");
+            }} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:13, color:C.red, fontFamily:"inherit" }}>✕</button>
+          </div>
+        ))}
+        <div style={{ display:"flex", gap:8, marginTop:8 }}>
+          <input style={Object.assign({},INP,{flex:1})} placeholder="New category name..." value={newCat} onChange={e => setNewCat(e.target.value)} />
+          <button onClick={() => {
+            const v = newCat.trim();
+            if (!v) return;
+            const cur = settings.categories||CATS;
+            if (cur.map(c=>c.toLowerCase()).includes(v.toLowerCase())) return toast("Category already exists","warn");
+            onSettingsChange({ ...settings, categories:[...cur, v] });
+            setNewCat("");
+            toast("Category added");
+          }} style={{ padding:"11px 16px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>+ Add</button>
+        </div>
       </div>
       {pinBlocks.map(pt => (
         <div key={pt.type} style={SS}>
