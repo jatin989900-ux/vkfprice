@@ -307,15 +307,22 @@ function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick 
   const single = filter !== "all";
   const isNew    = it.createdAt && it.updatedAt && sameDay(it.createdAt, it.updatedAt);
   const isEdited = it.createdAt && it.updatedAt && !sameDay(it.createdAt, it.updatedAt);
+  const isHighlighted = !!it.highlighted;
 
-  // SDM display value — shown only when unlocked (or admin)
   const canSeeSdm = isAdmin || sdmUnlocked;
-  const sdmVal = canSeeSdm && it.sdm != null
-    ? fp(it.sdm) + " + GST = " + fp(it.sdmInc)
-    : "🔒 PIN required";
 
   return (
-    <div style={{ background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"13px", marginBottom:8, boxShadow:"0 1px 5px rgba(0,0,0,0.04)" }}>
+    <div style={{ background:C.card, border:"2px solid "+(isHighlighted?"#F59E0B":C.border), borderRadius:12, padding:"13px", marginBottom:8, boxShadow:isHighlighted?"0 2px 12px rgba(245,158,11,0.18)":"0 1px 5px rgba(0,0,0,0.04)" }}>
+      {/* Highlight banner */}
+      {isHighlighted && (
+        <div style={{ background:"#FEF3C7", border:"1px solid #FCD34D", borderRadius:8, padding:"6px 11px", marginBottom:9, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <span style={{ fontSize:12, fontWeight:800, color:"#92400E" }}>⭐ Highlighted Product</span>
+          {it.commission && <span style={{ fontSize:12, fontWeight:800, color:"#B45309", background:"#fff", border:"1.5px solid #FCD34D", borderRadius:20, padding:"2px 10px" }}>+{fp(parseFloat(it.commission))}/piece</span>}
+        </div>
+      )}
+      {isHighlighted && it.highlightNote && (
+        <div style={{ fontSize:11, color:"#92400E", fontStyle:"italic", marginBottom:8, fontWeight:600 }}>📌 {it.highlightNote}</div>
+      )}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:9 }}>
         <div style={{ flex:1, paddingRight:8 }}>
           <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>{it.name}</div>
@@ -862,15 +869,21 @@ function ImportModal({ brands, items, onItemsChange, onClose, cats }) {
 
 // ── MASTER VIEW ───────────────────────────────────────────────────
 function todayISO() { const d = new Date(); return d.toISOString().slice(0,10); }
-const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:"", customAddon:"", purchaseDate:"", active:true, notes:"" };
+const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:"", customAddon:"", purchaseDate:"", highlighted:false, commission:"", highlightNote:"", active:true, notes:"" };
 
 function MasterView({ brands, items, onItemsChange, settings }) {
   const [open, setOpen] = useState(false); const [eid, setEid] = useState(null);
   const [form, setForm] = useState(EI); const [errs, setErrs] = useState({});
-  const [fCat, setFCat] = useState("All"); const [fSt, setFSt] = useState("Active");
+  const [fCat, setFCat] = useState("All"); const [fSt, setFSt] = useState("Active"); const [fBrand, setFBrand] = useState("All");
   const [search, setSearch] = useState("");
   const [conf, setConf] = useState(null); const [showExp, setShowExp] = useState(false); const [showImp, setShowImp] = useState(false);
   const [historyItem, setHistoryItem] = useState(null);
+  const [showScroll, setShowScroll] = useState(false);
+  useEffect(() => {
+    function onScroll() { setShowScroll(window.scrollY > 150); }
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const brand  = brands.find(b => b.id === form.bId) || null;
   const prevEx = parseFloat(form.purchaseEx) || 0;
@@ -879,7 +892,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   function close() { setOpen(false); setEid(null); }
   function openAdd() { setForm(Object.assign({},EI,{_sigRL:""})); setEid(null); setErrs({}); setOpen(true); }
   function openEdit(it) {
-    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", purchaseDate:it.purchaseDate||"", _sigRL:"" }));
+    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", purchaseDate:it.purchaseDate||"", highlighted:!!it.highlighted, commission:it.commission||"", highlightNote:it.highlightNote||"", _sigRL:"" }));
     setEid(it.id); setErrs({}); setOpen(true);
   }
   function validate() {
@@ -920,6 +933,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   const list = useMemo(() => {
     return items.filter(i => {
       if (fCat !== "All" && i.cat !== fCat) return false;
+      if (fBrand !== "All" && i.bId !== fBrand) return false;
       if (fSt === "Active" && !i.active) return false;
       if (fSt === "Inactive" && i.active) return false;
       if (search) {
@@ -930,7 +944,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       return true;
     }).map(i => { const b = brands.find(x => x.id===i.bId)||null; return Object.assign({}, i, computeItem(i,b,settings), {_b:b}); })
       .sort((a,b) => new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
-  }, [items, brands, settings, fCat, fSt, search]);
+  }, [items, brands, settings, fCat, fSt, fBrand, search]);
 
   // Real-time duplicate check — exclude current item when editing
   const isDuplicate = form.name.trim() !== "" && items.some(i => i.name.trim().toLowerCase() === form.name.trim().toLowerCase() && i.id !== eid);
@@ -952,14 +966,24 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"9px 13px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
         ⚠ Purchase WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
       </div>
+      {/* Scroll buttons */}
+      {showScroll && (
+        <div style={{ position:"fixed", right:16, bottom:80, zIndex:300, display:"flex", flexDirection:"column", gap:8 }}>
+          <button onClick={() => window.scrollTo({top:0,behavior:"smooth"})} style={{ width:40, height:40, borderRadius:20, background:C.navy, color:"#fff", border:"none", fontSize:18, cursor:"pointer", boxShadow:"0 3px 12px rgba(0,0,0,0.2)", display:"flex", alignItems:"center", justifyContent:"center" }}>↑</button>
+          <button onClick={() => window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"})} style={{ width:40, height:40, borderRadius:20, background:C.navy, color:"#fff", border:"none", fontSize:18, cursor:"pointer", boxShadow:"0 3px 12px rgba(0,0,0,0.2)", display:"flex", alignItems:"center", justifyContent:"center" }}>↓</button>
+        </div>
+      )}
       <input style={Object.assign({},INP,{marginBottom:10})} placeholder="🔍 Search by item or brand..." value={search} onChange={e => setSearch(e.target.value)} />
-      <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+      <div style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap" }}>
         <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fCat} onChange={e => setFCat(e.target.value)}>
           <option value="All">All Categories</option>{cats.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <div style={{ display:"flex", border:"1px solid "+C.border, borderRadius:9, overflow:"hidden" }}>
-          {["All","Active","Inactive"].map(s => <button key={s} onClick={() => setFSt(s)} style={{ padding:"9px 11px", border:"none", cursor:"pointer", fontWeight:600, fontSize:12, fontFamily:"inherit", background:fSt===s?C.blue:"#fff", color:fSt===s?"#fff":C.sec }}>{s}</button>)}
-        </div>
+        <select style={Object.assign({},SEL,{flex:1,padding:"9px 11px"})} value={fBrand} onChange={e => setFBrand(e.target.value)}>
+          <option value="All">All Brands</option>{brands.map(b => <option key={b.id} value={b.id}>{b.code+" — "+b.name}</option>)}
+        </select>
+      </div>
+      <div style={{ display:"flex", border:"1px solid "+C.border, borderRadius:9, overflow:"hidden", marginBottom:12 }}>
+        {["All","Active","Inactive"].map(s => <button key={s} onClick={() => setFSt(s)} style={{ flex:1, padding:"9px 11px", border:"none", cursor:"pointer", fontWeight:600, fontSize:12, fontFamily:"inherit", background:fSt===s?C.blue:"#fff", color:fSt===s?"#fff":C.sec }}>{s}</button>)}
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr", gap:8, marginBottom:12 }}>
         <BtnP onClick={openAdd}>+ Add Item</BtnP>
@@ -1085,6 +1109,29 @@ function MasterView({ brands, items, onItemsChange, settings }) {
             )}
           </div>
         )}
+        {/* Highlights */}
+        <div style={{ background:form.highlighted?"#FEF3C7":"#F9FAFB", border:"1.5px solid "+(form.highlighted?"#F59E0B":C.border), borderRadius:11, padding:"12px", marginBottom:14 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:form.highlighted?12:0 }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:800, color:form.highlighted?"#92400E":C.sec }}>⭐ Highlight this product</div>
+              <div style={{ fontSize:11, color:form.highlighted?"#B45309":C.mute, marginTop:2 }}>Appears in salesman Highlights filter</div>
+            </div>
+            <button onClick={() => setForm(p => ({...p, highlighted:!p.highlighted}))}
+              style={{ padding:"7px 16px", borderRadius:20, border:"1.5px solid "+(form.highlighted?"#F59E0B":C.border), background:form.highlighted?"#F59E0B":"#fff", color:form.highlighted?"#fff":C.sec, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+              {form.highlighted ? "ON" : "OFF"}
+            </button>
+          </div>
+          {form.highlighted && (
+            <div>
+              <Fld label="Commission ₹ per piece" hint="e.g. 20 → shown as +₹20/piece">
+                <input style={INP} type="number" step="1" min="0" placeholder="e.g. 20" value={form.commission||""} onChange={e => setForm(p => ({...p,commission:e.target.value}))} />
+              </Fld>
+              <Fld label="Highlight Note (optional)" hint="e.g. Push this week · Clearance">
+                <input style={INP} value={form.highlightNote||""} placeholder="e.g. Push this week" onChange={e => setForm(p => ({...p,highlightNote:e.target.value}))} />
+              </Fld>
+            </div>
+          )}
+        </div>
         <Fld label="Notes (optional)"><input style={INP} value={form.notes} placeholder="e.g. seasonal, imported..." onChange={e => setForm(p => ({...p,notes:e.target.value}))} /></Fld>
         <Fld label="Status">
           <div style={{ display:"flex", gap:8 }}>
@@ -1098,11 +1145,12 @@ function MasterView({ brands, items, onItemsChange, settings }) {
 
 // ── PRICE LIST VIEW ───────────────────────────────────────────────
 const PRICE_FILTERS = [
-  { id:"all", label:"All Prices", col:C.text, bg:"#F3F4F6", br:C.border },
-  { id:"rl",  label:"🟢 RL",      col:C.rl,   bg:C.rlBg,   br:C.rlBr },
-  { id:"dm",  label:"🔵 DM",      col:C.dm,   bg:C.dmBg,   br:C.dmBr },
-  { id:"pl",  label:"🟣 PL",      col:C.pl,   bg:C.plBg,   br:C.plBr },
-  { id:"sdm", label:"🟠 SDM 🔒",  col:C.sdm,  bg:C.sdmBg,  br:C.sdmBr },
+  { id:"all",        label:"All Prices",   col:C.text,    bg:"#F3F4F6", br:C.border },
+  { id:"rl",         label:"🟢 RL",        col:C.rl,      bg:C.rlBg,   br:C.rlBr },
+  { id:"dm",         label:"🔵 DM",        col:C.dm,      bg:C.dmBg,   br:C.dmBr },
+  { id:"pl",         label:"🟣 PL",        col:C.pl,      bg:C.plBg,   br:C.plBr },
+  { id:"sdm",        label:"🟠 SDM 🔒",   col:C.sdm,     bg:C.sdmBg,  br:C.sdmBr },
+  { id:"highlights", label:"⭐ Highlights", col:"#B45309", bg:"#FEF3C7", br:"#FCD34D" },
 ];
 
 function PriceListView({ brands, items, settings, isAdmin }) {
@@ -1111,9 +1159,14 @@ function PriceListView({ brands, items, settings, isAdmin }) {
   const [fBrand,   setFBrand]   = useState("All");
   const [search,   setSearch]   = useState("");
   const [priceFilter, setPriceFilter] = useState("all");
-  // SDM PIN state (salesman only)
   const [sdmUnlocked, setSdmUnlocked] = useState(false);
   const [showSDMPin,  setShowSDMPin]  = useState(false);
+  const [showScroll,  setShowScroll]  = useState(false);
+  useEffect(() => {
+    function onScroll() { setShowScroll(window.scrollY > 150); }
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   function handleSDMClick() {
     if (sdmUnlocked) return;
@@ -1133,6 +1186,7 @@ function PriceListView({ brands, items, settings, isAdmin }) {
     if (fCat !== "All" && i.cat !== fCat) return false;
     if (fBrand !== "All" && i.bId !== fBrand) return false;
     if (search && !i.name.toLowerCase().includes(search.toLowerCase()) && !(i._b && i._b.name.toLowerCase().includes(search.toLowerCase()))) return false;
+    if (!isAdmin && priceFilter === "highlights" && !i.highlighted) return false;
     return true;
   });
 
@@ -1148,6 +1202,13 @@ function PriceListView({ brands, items, settings, isAdmin }) {
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
+      {/* Scroll buttons — admin only */}
+      {isAdmin && showScroll && (
+        <div style={{ position:"fixed", right:16, bottom:80, zIndex:300, display:"flex", flexDirection:"column", gap:8 }}>
+          <button onClick={() => window.scrollTo({top:0,behavior:"smooth"})} style={{ width:40, height:40, borderRadius:20, background:C.navy, color:"#fff", border:"none", fontSize:18, cursor:"pointer", boxShadow:"0 3px 12px rgba(0,0,0,0.2)", display:"flex", alignItems:"center", justifyContent:"center" }}>↑</button>
+          <button onClick={() => window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"})} style={{ width:40, height:40, borderRadius:20, background:C.navy, color:"#fff", border:"none", fontSize:18, cursor:"pointer", boxShadow:"0 3px 12px rgba(0,0,0,0.2)", display:"flex", alignItems:"center", justifyContent:"center" }}>↓</button>
+        </div>
+      )}
       {/* SDM PIN Modal */}
       {showSDMPin && !isAdmin && (
         <SDMPinModal
