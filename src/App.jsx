@@ -304,7 +304,7 @@ function SDMPinModal({ pin, onSuccess, onClose }) {
 // ── ITEM CARD ─────────────────────────────────────────────────────
 function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick }) {
   const filter = priceFilter || "all";
-  const single = filter !== "all";
+  const single = filter !== "all" && filter !== "highlights";
   const isNew    = it.createdAt && it.updatedAt && sameDay(it.createdAt, it.updatedAt);
   const isEdited = it.createdAt && it.updatedAt && !sameDay(it.createdAt, it.updatedAt);
   const isHighlighted = !!it.highlighted;
