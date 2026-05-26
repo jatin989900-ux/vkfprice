@@ -85,9 +85,13 @@ function computeItem(item, brand, settings) {
   const pl = calcPL(rl, add);
 
   const sdmAddOnRaw = item.sdmAddon;
-  const sdmAddOn = (sdmAddOnRaw !== "" && sdmAddOnRaw != null && !isNaN(parseFloat(sdmAddOnRaw)) && parseFloat(sdmAddOnRaw) >= 0) ? parseFloat(sdmAddOnRaw) : null;
+  const sdmPctRaw  = item.sdmPct;
+  // sdmPct takes priority over sdmAddon if set
+  const sdmPctVal  = (sdmPctRaw!==""&&sdmPctRaw!=null&&!isNaN(parseFloat(sdmPctRaw))&&parseFloat(sdmPctRaw)>0) ? parseFloat(sdmPctRaw)/100 : null;
+  const sdmAddOn   = sdmPctVal!=null && ex>0
+    ? +(ex * sdmPctVal).toFixed(2)
+    : (sdmAddOnRaw!==""&&sdmAddOnRaw!=null&&!isNaN(parseFloat(sdmAddOnRaw))&&parseFloat(sdmAddOnRaw)>=0)?parseFloat(sdmAddOnRaw):null;
   const sdm    = (sdmAddOn !== null && ex > 0) ? +(ex + sdmAddOn).toFixed(2) : null;
-  // SDM inc-GST total (for display)
   const sdmInc = sdm != null ? +(sdm * (1 + gst)).toFixed(2) : null;
 
   function profitIncGST(price) {
@@ -107,7 +111,7 @@ function computeItem(item, brand, settings) {
     rlM, rl, rlProfit: profitIncGST(rl),
     dmM, dm, dmProfit: profitIncGST(dm),
     add, pl, plProfit: profitIncGST(pl),
-    sdmAddOn, sdm, sdmInc, sdmProfit: profitExGST(sdm),
+    sdmAddOn, sdm, sdmInc, sdmProfit: profitExGST(sdm), sdmPctVal,
     rlPriceLocked: rlCustom !== null,
     dmPriceLocked: dmCustom !== null,
     gst,
@@ -329,6 +333,7 @@ function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick 
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
             {it._b && <div style={{ background:C.navy, color:"#fff", borderRadius:5, padding:"1px 8px", fontSize:10, fontWeight:800 }}>{it._b.code}</div>}
             <Chip col={C.sec} bg="#F3F4F6" br={C.border}>{it.cat}</Chip>
+            {it.pinned && <Chip col={C.blue} bg="#EFF6FF" br="#BFDBFE">📌 Pinned</Chip>}
             {isNew    && <Chip col={C.new_} bg={C.newBg} br={C.newBr}>🆕 New</Chip>}
             {isEdited && <Chip col={C.upd}  bg={C.updBg} br={C.updBr}>✏️ Updated</Chip>}
           </div>
@@ -869,7 +874,7 @@ function ImportModal({ brands, items, onItemsChange, onClose, cats }) {
 
 // ── MASTER VIEW ───────────────────────────────────────────────────
 function todayISO() { const d = new Date(); return d.toISOString().slice(0,10); }
-const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", plAddon:"", customAddon:"", purchaseDate:"", highlighted:false, commission:"", highlightNote:"", active:true, notes:"" };
+const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", sdmPct:"", plAddon:"", customAddon:"", purchaseDate:"", highlighted:false, commission:"", highlightNote:"", pinned:false, active:true, notes:"" };
 
 function MasterView({ brands, items, onItemsChange, settings }) {
   const [open, setOpen] = useState(false); const [eid, setEid] = useState(null);
@@ -892,7 +897,7 @@ function MasterView({ brands, items, onItemsChange, settings }) {
   function close() { setOpen(false); setEid(null); }
   function openAdd() { setForm(Object.assign({},EI,{_sigRL:""})); setEid(null); setErrs({}); setOpen(true); }
   function openEdit(it) {
-    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", purchaseDate:it.purchaseDate||"", highlighted:!!it.highlighted, commission:it.commission||"", highlightNote:it.highlightNote||"", _sigRL:"" }));
+    setForm(Object.assign({}, EI, it, { customDM:it.customDM||"", customRLPrice:it.customRLPrice||"", customDMPrice:it.customDMPrice||"", sdmAddon:it.sdmAddon!=null?String(it.sdmAddon):"", sdmPct:it.sdmPct||"", purchaseDate:it.purchaseDate||"", highlighted:!!it.highlighted, commission:it.commission||"", highlightNote:it.highlightNote||"", pinned:!!it.pinned, _sigRL:"" }));
     setEid(it.id); setErrs({}); setOpen(true);
   }
   function validate() {
@@ -1068,12 +1073,31 @@ function MasterView({ brands, items, onItemsChange, settings }) {
         {/* SDM */}
         <div style={{ background:C.sdmBg, border:"1px solid "+C.sdmBr, borderRadius:11, padding:"12px", marginBottom:14 }}>
           <div style={{ fontSize:11, fontWeight:800, color:C.sdm, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>🟠 SDM — Special DM (Ex-GST, + GST extra)</div>
-          <div style={{ fontSize:11, color:C.sdm, marginBottom:10 }}>Customer pays this + GST. Profit = add-on amount. Hidden behind PIN in salesman view.</div>
-          <Fld label="SDM Add-on ₹ (added to purchase Ex-GST)" err={errs.sdma}
-            hint={prevEx > 0 && sdmHas ? "SDM = " + fp(prevEx + parseFloat(form.sdmAddon)) + " Ex-GST · +" + (form.gst*100).toFixed(0) + "% GST = " + fp(+((prevEx+parseFloat(form.sdmAddon))*(1+parseFloat(form.gst))).toFixed(2)) + " · Profit = ₹" + parseFloat(form.sdmAddon).toFixed(2) : "e.g. 20 → SDM = purchase + ₹20"}>
-            <input style={Object.assign({},INP,{borderColor:errs.sdma?C.red:sdmHas?C.sdm:C.border,fontWeight:sdmHas?700:400,color:sdmHas?C.sdm:C.text})}
+          <div style={{ fontSize:11, color:C.sdm, marginBottom:10 }}>Customer pays this + GST. Hidden behind PIN in salesman view.</div>
+          <MarginOverride
+            label={form.sdmPct!==""&&form.sdmPct!=null&&!isNaN(parseFloat(form.sdmPct))?"SDM Margin % (active)":"SDM Margin % (Override)"}
+            col={C.sdm} bg={C.sdmBg} br={C.sdmBr}
+            value={form.sdmPct}
+            onChange={v => setForm(p => ({...p, sdmPct:v, sdmAddon:""}))}
+            srcLabel={prevEx>0&&form.sdmPct!==""&&!isNaN(parseFloat(form.sdmPct)) ? "SDM = "+fp(+(prevEx*(1+parseFloat(form.sdmPct)/100)).toFixed(2))+" Ex-GST" : "Enter % or use add-on below"}
+            err={errs.sdma}
+          />
+          <Fld label="— OR — SDM Add-on ₹ (fixed amount on purchase Ex-GST)"
+            hint={prevEx>0&&form.sdmAddon!==""&&!isNaN(parseFloat(form.sdmAddon))&&form.sdmPct===""
+              ? "SDM = "+fp(prevEx+parseFloat(form.sdmAddon))+" Ex-GST · Profit = ₹"+parseFloat(form.sdmAddon).toFixed(2)
+              : form.sdmPct!==""?"Clear margin % above first to use add-on":"e.g. 20 → SDM = purchase + ₹20"}>
+            <input
+              style={Object.assign({},INP,{
+                borderColor:errs.sdma?C.red:form.sdmAddon!==""&&form.sdmPct===""?C.sdm:C.border,
+                color:form.sdmAddon!==""&&form.sdmPct===""?C.sdm:C.text,
+                fontWeight:form.sdmAddon!==""&&form.sdmPct===""?700:400,
+                opacity:form.sdmPct!==""?0.5:1
+              })}
               type="number" step="1" min="0" placeholder="e.g. 20"
-              value={form.sdmAddon} onChange={e => setForm(p => ({...p,sdmAddon:e.target.value}))} />
+              disabled={form.sdmPct!==""}
+              value={form.sdmAddon}
+              onChange={e => setForm(p => ({...p, sdmAddon:e.target.value}))}
+            />
           </Fld>
         </div>
         {/* PL */}
@@ -1109,6 +1133,19 @@ function MasterView({ brands, items, onItemsChange, settings }) {
             )}
           </div>
         )}
+        {/* Pin item */}
+        <div style={{ background:form.pinned?"#EFF6FF":"#F9FAFB", border:"1.5px solid "+(form.pinned?C.blue:C.border), borderRadius:11, padding:"12px", marginBottom:14 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:800, color:form.pinned?C.blue:C.sec }}>📌 Pin in salesman view</div>
+              <div style={{ fontSize:11, color:form.pinned?C.blue:C.mute, marginTop:2 }}>Appears at top of default All Prices view</div>
+            </div>
+            <button onClick={() => setForm(p => ({...p, pinned:!p.pinned}))}
+              style={{ padding:"7px 16px", borderRadius:20, border:"1.5px solid "+(form.pinned?C.blue:C.border), background:form.pinned?C.blue:"#fff", color:form.pinned?"#fff":C.sec, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+              {form.pinned ? "ON" : "OFF"}
+            </button>
+          </div>
+        </div>
         {/* Highlights */}
         <div style={{ background:form.highlighted?"#FEF3C7":"#F9FAFB", border:"1.5px solid "+(form.highlighted?"#F59E0B":C.border), borderRadius:11, padding:"12px", marginBottom:14 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:form.highlighted?12:0 }}>
@@ -1154,7 +1191,7 @@ const PRICE_FILTERS = [
 ];
 
 function PriceListView({ brands, items, settings, isAdmin }) {
-  const [viewMode, setViewMode] = useState("general");
+  const [viewMode, setViewMode] = useState("date");
   const [fCat,     setFCat]     = useState("All");
   const [fBrand,   setFBrand]   = useState("All");
   const [search,   setSearch]   = useState("");
@@ -1305,6 +1342,23 @@ function PriceListView({ brands, items, settings, isAdmin }) {
 
       {viewMode === "date" && (
         <div>
+          {/* Pinned items — salesman only, only in default all-prices view */}
+          {!isAdmin && priceFilter === "all" && (() => {
+            const pinned = filtered.filter(i => i.pinned);
+            if (!pinned.length) return null;
+            return (
+              <div style={{ marginBottom:16 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+                  <div style={{ flex:1, height:1, background:"#BFDBFE" }} />
+                  <div style={{ background:C.blue, color:"#fff", borderRadius:20, padding:"4px 14px", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}>📌 Pinned Items</div>
+                  <div style={{ flex:1, height:1, background:"#BFDBFE" }} />
+                </div>
+                {pinned.map(it => (
+                  <ItemCard key={it.id} it={it} isAdmin={false} showDate={false} priceFilter="all" sdmUnlocked={sdmUnlocked} onSDMClick={handleSDMClick} />
+                ))}
+              </div>
+            );
+          })()}
           {Object.keys(byDate).length === 0 && <div style={{ textAlign:"center", padding:"36px", color:C.mute, fontSize:14 }}>No items found.</div>}
           {Object.keys(byDate).map(day => (
             <div key={day}>
@@ -1320,6 +1374,139 @@ function PriceListView({ brands, items, settings, isAdmin }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── DASHBOARD VIEW ────────────────────────────────────────────────
+function DashboardView({ brands, items, settings }) {
+  const [fBrand, setFBrand] = useState("All");
+  const PTYPES = [
+    { id:"rl",  label:"RL",  col:C.rl,  bg:C.rlBg,  br:C.rlBr },
+    { id:"dm",  label:"DM",  col:C.dm,  bg:C.dmBg,  br:C.dmBr },
+    { id:"pl",  label:"PL",  col:C.pl,  bg:C.plBg,  br:C.plBr },
+    { id:"sdm", label:"SDM", col:C.sdm, bg:C.sdmBg, br:C.sdmBr },
+  ];
+
+  const enriched = useMemo(() => {
+    return items.filter(i => i.active).map(i => {
+      const b = brands.find(x => x.id===i.bId)||null;
+      return Object.assign({}, i, computeItem(i,b,settings), {_b:b});
+    });
+  }, [items, brands, settings]);
+
+  const filtered = fBrand === "All" ? enriched : enriched.filter(i => i.bId === fBrand);
+
+  function avgMargin(arr, key) {
+    const valid = arr.filter(i => i[key] && i[key+"Profit"] && i[key+"Profit"].pct != null);
+    if (!valid.length) return null;
+    return +(valid.reduce((s,i) => s + i[key+"Profit"].pct, 0) / valid.length).toFixed(1);
+  }
+  function topItems(arr, key, n, asc) {
+    return arr.filter(i => i[key] && i[key+"Profit"] && i[key+"Profit"].pct != null)
+      .sort((a,b) => asc ? a[key+"Profit"].pct - b[key+"Profit"].pct : b[key+"Profit"].pct - a[key+"Profit"].pct)
+      .slice(0, n);
+  }
+
+  const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:13, padding:"16px", marginBottom:13, boxShadow:"0 1px 6px rgba(0,0,0,0.04)" };
+
+  function MarginBar({ pct, col }) {
+    if (pct == null) return <span style={{ fontSize:11, color:C.mute }}>—</span>;
+    const w = Math.min(Math.abs(pct), 60);
+    return (
+      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ flex:1, background:"#F3F4F6", borderRadius:20, height:8, overflow:"hidden" }}>
+          <div style={{ width:w+"%", background:pct<0?C.red:col, height:"100%", borderRadius:20, transition:"width 0.3s" }} />
+        </div>
+        <span style={{ fontSize:12, fontWeight:800, color:pct<0?C.red:col, minWidth:42, textAlign:"right" }}>{pct}%</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:"16px 16px 80px" }}>
+      {/* Filter */}
+      <div style={{ marginBottom:14 }}>
+        <select style={Object.assign({},SEL,{marginBottom:0})} value={fBrand} onChange={e => setFBrand(e.target.value)}>
+          <option value="All">All Brands</option>
+          {brands.map(b => <option key={b.id} value={b.id}>{b.code+" — "+b.name}</option>)}
+        </select>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
+        {PTYPES.map(pt => {
+          const key = pt.id === "sdm" ? "sdm" : pt.id;
+          const profKey = key + "Profit";
+          const avg = avgMargin(filtered, key);
+          return (
+            <div key={pt.id} style={{ background:pt.bg, border:"1.5px solid "+pt.br, borderRadius:12, padding:"14px 12px", textAlign:"center" }}>
+              <div style={{ fontSize:10, fontWeight:800, color:pt.col, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:6 }}>{pt.label} Avg Margin</div>
+              <div style={{ fontSize:26, fontWeight:900, color:pt.col }}>{avg != null ? avg+"%" : "—"}</div>
+              <div style={{ fontSize:10, color:pt.col, marginTop:4, opacity:0.7 }}>
+                {filtered.filter(i => i[key] && i[profKey]).length} items
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Per price type details */}
+      {PTYPES.map(pt => {
+        const key = pt.id;
+        const profKey = key + "Profit";
+        const best = topItems(filtered, key, 5, false);
+        const worst = topItems(filtered, key, 5, true);
+        if (!best.length) return null;
+        return (
+          <div key={pt.id} style={SS}>
+            <div style={{ fontSize:13, fontWeight:800, color:pt.col, marginBottom:12 }}>{pt.label} — Margin Breakdown</div>
+            <div style={{ fontSize:11, fontWeight:700, color:C.profit, textTransform:"uppercase", letterSpacing:"0.4px", marginBottom:6 }}>Top 5 Highest</div>
+            {best.map((it,i) => (
+              <div key={it.id} style={{ marginBottom:7 }}>
+                <div style={{ fontSize:12, fontWeight:600, color:C.text, marginBottom:3, display:"flex", justifyContent:"space-between" }}>
+                  <span>{it.name}</span>
+                  <span style={{ fontSize:11, color:C.mute }}>{it._b?it._b.code:""}</span>
+                </div>
+                <MarginBar pct={it[profKey]?it[profKey].pct:null} col={pt.col} />
+              </div>
+            ))}
+            <div style={{ fontSize:11, fontWeight:700, color:C.red, textTransform:"uppercase", letterSpacing:"0.4px", marginBottom:6, marginTop:14 }}>Bottom 5 — Watch these</div>
+            {worst.map((it,i) => (
+              <div key={it.id} style={{ marginBottom:7 }}>
+                <div style={{ fontSize:12, fontWeight:600, color:C.text, marginBottom:3, display:"flex", justifyContent:"space-between" }}>
+                  <span>{it.name}</span>
+                  <span style={{ fontSize:11, color:C.mute }}>{it._b?it._b.code:""}</span>
+                </div>
+                <MarginBar pct={it[profKey]?it[profKey].pct:null} col={pt.col} />
+              </div>
+            ))}
+          </div>
+        );
+      })}
+
+      {/* Brand-wise summary */}
+      <div style={SS}>
+        <div style={{ fontSize:13, fontWeight:800, marginBottom:12 }}>Brand-wise Average RL Margin</div>
+        {brands.map(b => {
+          const bItems = enriched.filter(i => i.bId === b.id && i.rl && i.rlProfit);
+          if (!bItems.length) return null;
+          const avg = +(bItems.reduce((s,i)=>s+i.rlProfit.pct,0)/bItems.length).toFixed(1);
+          return (
+            <div key={b.id} style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:4, display:"flex", justifyContent:"space-between" }}>
+                <span>{b.name}</span><span style={{ fontSize:11, color:C.mute }}>{bItems.length} items</span>
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ flex:1, background:"#F3F4F6", borderRadius:20, height:8, overflow:"hidden" }}>
+                  <div style={{ width:Math.min(Math.abs(avg),60)+"%", background:C.rl, height:"100%", borderRadius:20 }} />
+                </div>
+                <span style={{ fontSize:12, fontWeight:800, color:C.rl, minWidth:42, textAlign:"right" }}>{avg}%</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1441,7 +1628,7 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
 // ── ADMIN APP ─────────────────────────────────────────────────────
 function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, onItemsChange, onLogout, syncStatus }) {
   const [tab, setTab] = useState("master");
-  const NAV = [{ id:"master",icon:"📋",label:"Master" },{ id:"pricelist",icon:"🧾",label:"Prices" },{ id:"brands",icon:"🏷",label:"Brands" },{ id:"settings",icon:"⚙️",label:"Settings" }];
+  const NAV = [{ id:"master",icon:"📋",label:"Master" },{ id:"dashboard",icon:"📊",label:"Dashboard" },{ id:"brands",icon:"🏷",label:"Brands" },{ id:"settings",icon:"⚙️",label:"Settings" }];
   return (
     <div style={{ minHeight:"100vh", background:C.bg }}>
       <div style={{ background:C.navy, padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, boxShadow:"0 2px 10px rgba(0,0,0,0.2)" }}>
@@ -1452,7 +1639,7 @@ function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, o
         <button onClick={onLogout} style={{ padding:"7px 13px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.22)", background:"rgba(255,255,255,0.08)", color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Logout</button>
       </div>
       {tab === "master"    && <MasterView    brands={brands} items={items} onItemsChange={onItemsChange} settings={settings} />}
-      {tab === "pricelist" && <PriceListView brands={brands} items={items} settings={settings} isAdmin />}
+      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} />}
       {tab === "brands"    && <BrandsView    brands={brands} onBrandsChange={onBrandsChange} />}
       {tab === "settings"  && <SettingsView  settings={settings} onSettingsChange={onSettingsChange} syncStatus={syncStatus} />}
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
