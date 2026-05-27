@@ -1328,7 +1328,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const otherAmtN   = parseFloat(otherAmt)||0;
   const adjN        = parseFloat(adjustment)||0;
   const roundOffN   = parseFloat(roundOff)||0;
-  const grandTotal  = +(subtotal+billGSTAmt+otherAmtN+adjN+roundOffN).toFixed(2);
+  const preRound    = +(subtotal+billGSTAmt+otherAmtN+adjN).toFixed(2);
+  const autoRoundSuggestion = roundOffN===0 ? +(Math.round(preRound)-preRound).toFixed(2) : null;
+  const grandTotal  = +(preRound+roundOffN).toFixed(2);
   const totalProfit = cartLines.reduce((s,l)=>{ const p=lineProfit(l); return s+(p||0); },0);
 
   function nextEstNo() {
@@ -1559,7 +1561,10 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         {searchResults.length>0&&(
           <div style={{ marginTop:6, maxHeight:220, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9 }}>
             {searchResults.map(it=>(
-              <button key={it.id} onClick={()=>{ defaultPT?addToCart(it,defaultPT):setPricePopup(it); }}
+              <button key={it.id} onClick={()=>{ 
+                if(defaultPT==="sdm"&&!sdmUnlockedEst){ setSdmPinPopup(true); return; }
+                defaultPT?addToCart(it,defaultPT):setPricePopup(it); 
+              }}
                 style={{ display:"flex", justifyContent:"space-between", alignItems:"center", width:"100%", padding:"10px 12px", background:"#fff", border:"none", borderBottom:"1px solid "+C.border, cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}>
                 <div>
                   <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{it.name}</div>
@@ -1652,7 +1657,15 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
           </div>
           <Fld label="Adjustment ₹" hint="Use − for discount"><input style={INP} type="number" placeholder="e.g. -50" value={adjustment} onChange={e=>setAdjustment(e.target.value)} /></Fld>
           <Fld label="Round Off ₹" hint="e.g. -2 or +3 to make round figure">
-            <input style={INP} type="number" step="0.01" placeholder="e.g. -2 or +3" value={roundOff} onChange={e=>setRoundOff(e.target.value)} />
+            <div style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
+              <input style={Object.assign({},INP,{flex:1})} type="number" step="0.01" placeholder="e.g. -2 or +3" value={roundOff} onChange={e=>setRoundOff(e.target.value)} />
+              {autoRoundSuggestion!==null&&autoRoundSuggestion!==0&&(
+                <button onClick={()=>setRoundOff(String(autoRoundSuggestion))}
+                  style={{ padding:"11px 12px", borderRadius:9, border:"1.5px solid "+C.blue, background:"#EFF6FF", color:C.blue, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>
+                  Auto {autoRoundSuggestion>0?"+":""}{autoRoundSuggestion}
+                </button>
+              )}
+            </div>
           </Fld>
           <Fld label="Narration / Note"><input style={INP} placeholder="e.g. Cash payment..." value={narration} onChange={e=>setNarration(e.target.value)} /></Fld>
           <div style={{ display:"flex", justifyContent:"space-between", background:C.navy, borderRadius:10, padding:"13px 16px", marginTop:4 }}>
@@ -1947,9 +1960,8 @@ function PriceListView({ brands, items, settings, isAdmin, onAddToEstimate }) {
 }
 
 // ── DASHBOARD VIEW ────────────────────────────────────────────────
-function DashboardView({ brands, items, settings, onSettingsChange, estimates }) {
+function DashboardView({ brands, items, settings, onSettingsChange, estimates, onEstimatesSave }) {
   const [fBrand, setFBrand] = useState("All");
-  const [newSm,  setNewSm]  = useState("");
   const [showEst, setShowEst] = useState(false);
   const PTYPES = [
     { id:"rl",  label:"RL",  col:C.rl,  bg:C.rlBg,  br:C.rlBr },
@@ -2024,29 +2036,6 @@ function DashboardView({ brands, items, settings, onSettingsChange, estimates })
           </div>
         );
       })()}
-
-      {/* Salesman management */}
-      <div style={{ background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:14 }}>
-        <div style={{ fontSize:13, fontWeight:800, marginBottom:10 }}>👥 Salesmen</div>
-        {(settings.salesmen||[]).map((s,i) => (
-          <div key={s} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 10px", background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:8, marginBottom:6 }}>
-            <span style={{ fontSize:13, fontWeight:600 }}>{s}</span>
-            <button onClick={() => { const next = (settings.salesmen||[]).filter(x=>x!==s); if(next.length===0)return toast("Keep at least one salesman","warn"); onSettingsChange({...settings,salesmen:next}); toast("Removed","warn"); }}
-              style={{ width:28, height:28, borderRadius:6, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:13, color:C.red, fontFamily:"inherit" }}>✕</button>
-          </div>
-        ))}
-        <div style={{ display:"flex", gap:8, marginTop:8 }}>
-          <input style={Object.assign({},INP,{flex:1})} placeholder="Add salesman name..." value={newSm} onChange={e => setNewSm(e.target.value)} />
-          <button onClick={() => {
-            const v = newSm.trim();
-            if(!v) return;
-            const cur = settings.salesmen||[];
-            if(cur.map(s=>s.toLowerCase()).includes(v.toLowerCase())) return toast("Already exists","warn");
-            onSettingsChange({...settings, salesmen:[...cur,v]});
-            setNewSm(""); toast("Salesman added");
-          }} style={{ padding:"11px 16px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>+ Add</button>
-        </div>
-      </div>
 
       {/* Brand margin filter */}
       <div style={{ marginBottom:14 }}>
@@ -2135,6 +2124,18 @@ function DashboardView({ brands, items, settings, onSettingsChange, estimates })
 }
 
 // ── SETTINGS VIEW ─────────────────────────────────────────────────
+function SalesmanAdder({ settings, onSettingsChange }) {
+  const [val, setVal] = useState("");
+  return (
+    <div style={{ display:"flex", gap:8, marginTop:8 }}>
+      <input style={Object.assign({},INP,{flex:1})} placeholder="Add salesman name..." value={val} onChange={e=>setVal(e.target.value)}
+        onKeyDown={e=>{ if(e.key==="Enter"){ const v=val.trim(); if(!v)return; const cur=settings.salesmen||[]; if(cur.map(s=>s.toLowerCase()).includes(v.toLowerCase()))return toast("Already exists","warn"); onSettingsChange({...settings,salesmen:[...cur,v]}); setVal(""); toast("Salesman added"); } }} />
+      <button onClick={()=>{ const v=val.trim(); if(!v)return; const cur=settings.salesmen||[]; if(cur.map(s=>s.toLowerCase()).includes(v.toLowerCase()))return toast("Already exists","warn"); onSettingsChange({...settings,salesmen:[...cur,v]}); setVal(""); toast("Salesman added"); }}
+        style={{ padding:"11px 16px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>+ Add</button>
+    </div>
+  );
+}
+
 function SettingsView({ settings, onSettingsChange, syncStatus }) {
   const [form, setForm] = useState({
     co:settings.co, tag:settings.tag,
@@ -2240,6 +2241,19 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
           <BtnP color={pt.col} onClick={() => changePIN(pt.type)}>{"Update " + pt.label + " PIN"}</BtnP>
         </div>
       ))}
+      {/* Salesman Management */}
+      <div style={SS}>
+        <div style={{ fontSize:14, fontWeight:800, marginBottom:14 }}>👥 Salesmen</div>
+        <div style={{ fontSize:11, color:C.mute, marginBottom:10 }}>Salesmen listed here appear in the estimate dropdown.</div>
+        {(settings.salesmen||[]).map(s => (
+          <div key={s} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 12px", background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:8, marginBottom:7 }}>
+            <span style={{ fontSize:13, fontWeight:600 }}>{s}</span>
+            <button onClick={() => { const next=(settings.salesmen||[]).filter(x=>x!==s); if(next.length===0)return toast("Keep at least one salesman","warn"); onSettingsChange({...settings,salesmen:next}); toast("Removed","warn"); }}
+              style={{ width:28, height:28, borderRadius:6, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:13, color:C.red, fontFamily:"inherit" }}>✕</button>
+          </div>
+        ))}
+        <SalesmanAdder settings={settings} onSettingsChange={onSettingsChange} />
+      </div>
       <div style={Object.assign({},SS,{textAlign:"center"})}>
         <div style={{ fontSize:13, color:C.sec, lineHeight:1.7 }}>{"v" + VER}</div>
         <div style={{ fontSize:12, color:C.mute, marginTop:4 }}>Data syncs automatically across all devices</div>
@@ -2262,7 +2276,7 @@ function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, o
         <button onClick={onLogout} style={{ padding:"7px 13px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.22)", background:"rgba(255,255,255,0.08)", color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Logout</button>
       </div>
       {tab === "master"    && <MasterView    brands={brands} items={items} onItemsChange={onItemsChange} settings={settings} />}
-      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} onSettingsChange={onSettingsChange} estimates={estimates} />}
+      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} onSettingsChange={onSettingsChange} estimates={estimates} onEstimatesSave={onEstimatesSave} />}
       {tab === "brands"    && <BrandsView    brands={brands} onBrandsChange={onBrandsChange} />}
       {tab === "settings"  && <SettingsView  settings={settings} onSettingsChange={onSettingsChange} syncStatus={syncStatus} />}
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
