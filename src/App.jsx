@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import * as XLSX from "xlsx";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
@@ -1196,7 +1198,8 @@ const PRICE_TYPES = [
 ];
 
 // ── WHATSAPP HELPER ───────────────────────────────────────────────
-const WA_NUMBER = "917532002298";
+const WA_NUMBER = "917532002298"; // kept for backward compat
+const WA_TEAM = "911140553488";
 function buildWAText(est, co) {
   let msg = `*ESTIMATE — ${est.number}*\n${co}\nDate: ${fmtDate(est.createdAt)}\nSalesman: ${est.salesmanName}`;
   if (est.custName)  msg += `\nCustomer: ${est.custName}`;
@@ -1221,11 +1224,13 @@ function buildWAText(est, co) {
 }
 
 const PRINT_CSS = `
+@page { size: A4 portrait; margin: 8mm; }
 @media print {
   body { margin: 0; }
   body * { visibility: hidden !important; }
-  #vkf-print-area { display: block !important; position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: #fff !important; padding: 20px !important; }
+  #vkf-print-area { display: block !important; position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: #fff !important; padding: 0 !important; font-size: 11px !important; }
   #vkf-print-area * { visibility: visible !important; }
+  #vkf-print-area table { page-break-inside: avoid; }
 }
 `;
 
@@ -1248,6 +1253,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [narration,    setNarration]    = useState("");
   const [pricePopup,   setPricePopup]   = useState(null);
   const [saved,        setSaved]        = useState(null);
+  const [editingEstId, setEditingEstId] = useState(null); // id being edited
   const [showHistory,  setShowHistory]  = useState(false);
   const [editingLine,  setEditingLine]  = useState(null);
   const [customPriceInput, setCustomPriceInput] = useState("");
@@ -1342,28 +1348,32 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   function saveEstimate() {
     if (!salesmanName) return toast("Select salesman first","err");
     if (!cartLines.length) return toast("Add at least one item","err");
+    const existing = editingEstId ? (estimates||[]).find(e=>e.id===editingEstId) : null;
     const est = {
-      id:uid(), number:nextEstNo(),
+      id:       existing ? existing.id     : uid(),
+      number:   existing ? existing.number : nextEstNo(),
+      createdAt:existing ? existing.createdAt : new Date().toISOString(),
+      updatedAt:new Date().toISOString(),
       salesmanName, custName, custPhone,
-      lines: cartLines.map(l=>{
-          const {_it, ...rest} = l;
-          return rest;
-        }),
+      lines: cartLines.map(l=>{ const {_it,...rest}=l; return rest; }),
       billGST, billGSTPct, billGSTAmt,
       otherLabel, otherAmt:otherAmtN,
       adjustment:adjN, narration,
       subtotal, grandTotal, totalProfit, roundOff:roundOffN,
-      createdAt:new Date().toISOString(),
       status:"active",
     };
-    onEstimatesSave([...(estimates||[]),est]);
+    const next = existing
+      ? (estimates||[]).map(e=>e.id===existing.id?est:e)
+      : [...(estimates||[]),est];
+    onEstimatesSave(next);
     setSaved(est);
-    toast("Estimate "+est.number+" saved!");
+    setEditingEstId(null);
+    toast(existing?"Estimate "+est.number+" updated!":"Estimate "+est.number+" saved!");
   }
 
   function clearAll() {
     setCartLines([]); setCustName(""); setCustPhone(""); setBillGST(false);
-    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff(""); setRoundOff("");
+    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff(""); setEditingEstId(null);
   }
 
   function loadEstimate(est) {
@@ -1374,17 +1384,18 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     setOtherLabel(est.otherLabel||"");
     setOtherAmt(est.otherAmt?String(est.otherAmt):"");
     setAdjustment(est.adjustment?String(est.adjustment):"");
+    setRoundOff(est.roundOff?String(est.roundOff):"");
     setBillGST(!!est.billGST);
     setBillGSTPct(est.billGSTPct||0.05);
     setDefaultPT("");
     setSaved(null);
-    // Restore cart lines with _it lookup
+    setEditingEstId(est.id);
     const restored = (est.lines||[]).map(l => {
       const it = enriched.find(x=>x.id===l.itemId)||null;
       return {...l, _it:it, customPrice:l.customPrice||"", originalPrice:l.originalPrice||l.unitPrice};
     });
     setCartLines(restored);
-    toast("Estimate loaded for editing");
+    toast("Editing "+est.number+" — save to update");
   }
 
   function doPrint() {
@@ -1395,17 +1406,44 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     window.print();
   }
 
+  async function doDownloadPDF() {
+    const el = document.getElementById("vkf-print-area");
+    if (!el) return;
+    el.style.display = "block";
+    try {
+      const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:"#fff" });
+      el.style.display = "none";
+      const imgData = canvas.toDataURL("image/jpeg", 0.92);
+      const pdf = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 8;
+      const printW = pageW - margin*2;
+      const printH = (canvas.height * printW) / canvas.width;
+      // If content fits in one page, use that; else scale to fit
+      const usedH = Math.min(printH, pageH - margin*2);
+      pdf.addImage(imgData, "JPEG", margin, margin, printW, usedH);
+      const fname = (saved?.number||"estimate").replace(/[^a-zA-Z0-9-]/g,"_");
+      pdf.save(fname+".pdf");
+      toast("PDF downloaded!");
+    } catch(err) {
+      el.style.display = "none";
+      console.error(err);
+      toast("PDF failed — try Print instead","err");
+    }
+  }
+
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
 
   if (saved) {
     return (
       <div style={{ padding:"16px 16px 80px" }}>
         {/* Hidden clean print area */}
-        <div id="vkf-print-area" style={{ display:"none", fontFamily:"Arial,sans-serif", fontSize:13, color:"#000", padding:20 }}>
+        <div id="vkf-print-area" style={{ display:"none", fontFamily:"Arial,sans-serif", fontSize:11, color:"#000", padding:12 }}>
           <div style={{ textAlign:"center", borderBottom:"2px solid #000", paddingBottom:10, marginBottom:12 }}>
-            <div style={{ fontSize:22, fontWeight:900 }}>{settings.co}</div>
+            <div style={{ fontSize:17, fontWeight:900 }}>{settings.co}</div>
             <div style={{ fontSize:11 }}>{settings.tag}</div>
-            <div style={{ fontSize:16, fontWeight:700, marginTop:6, letterSpacing:2 }}>ESTIMATE / PERFORMA</div>
+            <div style={{ fontSize:13, fontWeight:700, marginTop:4, letterSpacing:1 }}>ESTIMATE / PERFORMA</div>
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12, fontSize:12 }}>
             <div><b>Estimate No:</b> {saved.number}<br/><b>Date:</b> {fmtDate(saved.createdAt)}<br/><b>Salesman:</b> {saved.salesmanName}</div>
@@ -1463,9 +1501,20 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
           <BtnP onClick={doPrint}>🖨 Print</BtnP>
-          <a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(saved,settings.co)} target="_blank" rel="noopener noreferrer"
-            style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"13px 16px", borderRadius:10, background:"#25D366", color:"#fff", fontWeight:700, fontSize:14, textDecoration:"none" }}>
-            💬 WhatsApp
+          <BtnP color="#7C3AED" onClick={doDownloadPDF}>⬇ PDF</BtnP>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:saved.custPhone?"1fr 1fr":"1fr", gap:10, marginBottom:10 }}>
+          {saved.custPhone && (
+            <a href={"https://wa.me/"+saved.custPhone.replace(/[^0-9]/g,"").replace(/^0/,"91")+"?text="+buildWAText(saved,settings.co)}
+              target="_blank" rel="noopener noreferrer"
+              style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"13px 16px", borderRadius:10, background:"#25D366", color:"#fff", fontWeight:700, fontSize:13, textDecoration:"none" }}>
+              💬 Customer
+            </a>
+          )}
+          <a href={"https://wa.me/"+WA_TEAM+"?text="+buildWAText(saved,settings.co)}
+            target="_blank" rel="noopener noreferrer"
+            style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"13px 16px", borderRadius:10, background:"#128C7E", color:"#fff", fontWeight:700, fontSize:13, textDecoration:"none" }}>
+            💬 Team
           </a>
         </div>
         <BtnO color={C.blue} onClick={clearAll}>+ New Estimate</BtnO>
@@ -1541,7 +1590,15 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
       )}
 
       <div style={SS}>
-        <div style={{ fontSize:13, fontWeight:800, color:C.navy, marginBottom:12 }}>🧾 New Estimate</div>
+        <div style={{ fontSize:13, fontWeight:800, color:editingEstId?C.amb:C.navy, marginBottom:editingEstId?8:12 }}>
+          {editingEstId ? "✏️ Editing Estimate" : "🧾 New Estimate"}
+        </div>
+        {editingEstId && (
+          <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:8, padding:"7px 11px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:700 }}>
+            ⚠ Editing: {(estimates||[]).find(e=>e.id===editingEstId)?.number||""} — saving will overwrite the original
+            <button onClick={clearAll} style={{ float:"right", background:"none", border:"none", color:C.red, cursor:"pointer", fontWeight:700, fontFamily:"inherit", fontSize:12 }}>Cancel Edit</button>
+          </div>
+        )}
         <Fld label="Salesman *">
           <select style={SEL} value={salesmanName} onChange={e=>setSalesmanName(e.target.value)}>
             <option value="">— Select Salesman —</option>
