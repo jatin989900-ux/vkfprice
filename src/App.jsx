@@ -1404,34 +1404,28 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     window.print();
   }
 
-  async function doDownloadPDF() {
+  function doDownloadPDF() {
+    // Open a clean print window with just the estimate content
     const el = document.getElementById("vkf-print-area");
     if (!el) return;
-    el.style.display = "block";
-    try {
-      // Dynamic imports — no build-time dependency needed
-      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
-        import("jspdf"),
-        import("html2canvas"),
-      ]);
-      const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:"#fff" });
-      el.style.display = "none";
-      const imgData = canvas.toDataURL("image/jpeg", 0.92);
-      const pdf = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const margin = 8;
-      const printW = pageW - margin*2;
-      const printH = (canvas.height * printW) / canvas.width;
-      const maxH = pdf.internal.pageSize.getHeight() - margin*2;
-      pdf.addImage(imgData, "JPEG", margin, margin, printW, Math.min(printH, maxH));
-      const fname = (saved ? saved.number : "estimate").replace(/[^a-zA-Z0-9-]/g,"_");
-      pdf.save(fname+".pdf");
-      toast("PDF downloaded!");
-    } catch(err) {
-      el.style.display = "none";
-      console.error(err);
-      toast("PDF failed — use Print instead","err");
-    }
+    const fname = saved ? saved.number : "Estimate";
+    const printWin = window.open("", "_blank", "width=800,height=900");
+    if (!printWin) { toast("Allow popups to download PDF","warn"); return; }
+    printWin.document.write(
+      "<html><head><title>" + fname + "</title>" +
+      "<style>" +
+      "body{font-family:Arial,sans-serif;font-size:11px;color:#000;margin:0;padding:16px;}" +
+      "table{width:100%;border-collapse:collapse;}" +
+      "th,td{padding:5px 7px;border:1px solid #ccc;}" +
+      "th{background:#f0f0f0;}" +
+      "@page{size:A4 portrait;margin:8mm;}" +
+      "@media print{body{padding:0;}}" +
+      "</style></head><body>" +
+      el.innerHTML +
+      "<script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};}<\/script>" +
+      "</body></html>"
+    );
+    printWin.document.close();
   }
 
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
@@ -1502,7 +1496,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
           <BtnP onClick={doPrint}>🖨 Print</BtnP>
-          <BtnP color="#7C3AED" onClick={doDownloadPDF}>⬇ PDF</BtnP>
+          <BtnP color="#7C3AED" onClick={doDownloadPDF}>⬇ Save PDF</BtnP>
         </div>
         <div style={{ display:"grid", gridTemplateColumns:saved.custPhone?"1fr 1fr":"1fr", gap:10, marginBottom:10 }}>
           {saved.custPhone && (
