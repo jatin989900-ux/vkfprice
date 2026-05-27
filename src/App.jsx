@@ -2483,6 +2483,26 @@ export default function App() {
   const [ready,      setReady]      = useState(false);
   const [syncStatus, setSyncStatus] = useState("synced");
 
+  // Inject global styles once
+  useEffect(() => {
+    if (!document.getElementById("vkf-global-css")) {
+      const s = document.createElement("style");
+      s.id = "vkf-global-css";
+      s.textContent = [
+        "*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}",
+        "input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}",
+        "input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}",
+        "input::placeholder{color:#CBD5E1;}",
+        "button:active{opacity:0.75;transform:scale(0.97);}",
+        "::-webkit-scrollbar{width:4px;}",
+        "::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}",
+        "@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}",
+        "@media print{.no-print{display:none!important;}}",
+      ].join("");
+      document.head.appendChild(s);
+    }
+  }, []);
+
   useEffect(() => {
     fsLoad().then(d => {
       if (d.settings)  setSettings(s => Object.assign({}, DEF_S, d.settings));
@@ -2520,7 +2540,7 @@ export default function App() {
 
   return (
     <div>
-      <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}input::placeholder{color:#CBD5E1;}button:active{opacity:0.75;transform:scale(0.97);}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}@media print{.no-print{display:none!important;}}`}</style>
+
       <ToastHost />
       <div style={{ fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
         {!role               && <Login       settings={settings} onLogin={setRole} />}
