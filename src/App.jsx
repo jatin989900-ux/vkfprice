@@ -1411,33 +1411,38 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
             <div><b>Estimate No:</b> {saved.number}<br/><b>Date:</b> {fmtDate(saved.createdAt)}<br/><b>Salesman:</b> {saved.salesmanName}</div>
             <div style={{ textAlign:"right" }}>{saved.custName?(<div><b>Customer:</b> {saved.custName}</div>):null}{saved.custPhone?(<div><b>Phone:</b> {saved.custPhone}</div>):null}</div>
           </div>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, marginBottom:12 }}>
-            <thead>
-              <tr style={{ background:"#f0f0f0" }}>
-                <th style={{ padding:"6px 8px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
-                <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
-                <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
-                <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Disc%</th>
-                <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {saved.lines.map((l,i) => {
-                const ep = parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
-                const disc=parseFloat(l.itemDiscount)||0;
-                const amt=ep*l.qty*(1-disc/100);
-                return (
-                  <tr key={l.id} style={{ borderBottom:"1px solid #ddd" }}>
-                    <td style={{ padding:"6px 8px", border:"1px solid #ddd" }}>{l.name}{l.includeGST?" (+"+((l.gstPct||0.05)*100).toFixed(0)+"% GST)":""}</td>
-                    <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
-                    <td style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
-                    <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>
-                    <td style={{ padding:"6px 4px", textAlign:"right", fontWeight:700, border:"1px solid #ddd" }}>{fp(amt)}</td>
+          {(()=>{
+            const hasDisc = saved.lines.some(l=>parseFloat(l.itemDiscount)>0);
+            return (
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, marginBottom:12 }}>
+                <thead>
+                  <tr style={{ background:"#f0f0f0" }}>
+                    <th style={{ padding:"6px 8px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
+                    <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
+                    <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
+                    {hasDisc && <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Disc%</th>}
+                    <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Amount</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {saved.lines.map((l,i) => {
+                    const ep=parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
+                    const disc=parseFloat(l.itemDiscount)||0;
+                    const amt=ep*l.qty*(1-disc/100);
+                    return (
+                      <tr key={l.id} style={{ borderBottom:"1px solid #ddd" }}>
+                        <td style={{ padding:"6px 8px", border:"1px solid #ddd" }}>{l.name}{l.includeGST?" (+"+((l.gstPct||0.05)*100).toFixed(0)+"% GST)":""}</td>
+                        <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
+                        <td style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
+                        {hasDisc && <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>}
+                        <td style={{ padding:"6px 4px", textAlign:"right", fontWeight:700, border:"1px solid #ddd" }}>{fp(amt)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            );
+          })()}
           <div style={{ width:"55%", marginLeft:"auto", fontSize:13 }}>
             <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Subtotal</span><b>{fp(saved.subtotal)}</b></div>
             {saved.billGST&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>GST ({((saved.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
@@ -1593,7 +1598,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                       {PRICE_TYPES.map(p2=>{
                         const prices2={rl:l._it&&l._it.rl,dm:l._it&&l._it.dm,pl:l._it&&l._it.pl,sdm:l._it&&(l._it.sdmInc||l._it.sdm)};
                         if(!prices2[p2.id]||p2.id===l.priceType)return null;
-                        return <button key={p2.id} onClick={()=>setCartLines(prev=>prev.map(x=>x.id===l.id?{...x,priceType:p2.id,unitPrice:prices2[p2.id],originalPrice:prices2[p2.id],customPrice:""}:x))} style={{ fontSize:9,padding:"1px 5px",borderRadius:4,border:"1px solid "+p2.col,background:p2.bg,color:p2.col,cursor:"pointer",fontFamily:"inherit",fontWeight:700 }}>{p2.label}</button>;
+                        return <button key={p2.id} onClick={()=>{ if(p2.id==="sdm"&&!sdmUnlockedEst){ setSdmPinPopup(true); return; } setCartLines(prev=>prev.map(x=>x.id===l.id?{...x,priceType:p2.id,unitPrice:prices2[p2.id],originalPrice:prices2[p2.id],customPrice:""}:x)); }} style={{ fontSize:9,padding:"1px 5px",borderRadius:4,border:"1px solid "+p2.col,background:p2.bg,color:p2.col,cursor:"pointer",fontFamily:"inherit",fontWeight:700 }}>{p2.id==="sdm"&&!sdmUnlockedEst?"SDM 🔒":p2.label}</button>;
                       })}
                       <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:12, background:"#F0F9FF", border:"1.5px solid "+C.blue, cursor:"pointer", color:C.blue, padding:"2px 8px", borderRadius:6, fontWeight:700, fontFamily:"inherit" }}>✏️ Price</button>
                     </div>
@@ -1685,6 +1690,91 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 }
 
 // ── ESTIMATE HISTORY MODAL ────────────────────────────────────────
+function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings, onLoadEstimate, cancelEst, deleteEst }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div style={{ background:cancelled?"#FFF5F5":"#F9FAFB", border:"1px solid "+(cancelled?"#FCA5A5":C.border), borderRadius:10, padding:"12px", marginBottom:8, opacity:cancelled?0.75:1 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+        <div style={{ flex:1 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+            <span style={{ fontWeight:800, fontSize:14, color:C.navy }}>{e.number}</span>
+            {cancelled && <span style={{ fontSize:10, color:C.red, fontWeight:800, background:C.redBg, padding:"1px 6px", borderRadius:4 }}>CANCELLED</span>}
+            {!isAdmin && age>=H24 && age<H48 && <span style={{ fontSize:10, color:C.mute, background:"#F3F4F6", padding:"1px 6px", borderRadius:4 }}>View only</span>}
+          </div>
+          <div style={{ fontSize:11, color:C.sec, marginTop:2 }}>{e.salesmanName}{e.custName?" · "+e.custName:""}{e.custPhone?" · "+e.custPhone:""}</div>
+          <div style={{ fontSize:10, color:C.mute, marginTop:2 }}>{fmtDateTime(e.createdAt)} · {e.lines.length} item{e.lines.length!==1?"s":""}</div>
+        </div>
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:16, fontWeight:900, color:C.navy }}>{fp(e.grandTotal)}</div>
+          {isAdmin && e.totalProfit!=null && <div style={{ fontSize:11, color:C.profit, fontWeight:700 }}>+{fp(e.totalProfit)} profit</div>}
+        </div>
+      </div>
+      {/* Expand button */}
+      <button onClick={()=>setExpanded(p=>!p)}
+        style={{ width:"100%", padding:"5px", borderRadius:6, border:"1px solid "+C.border, background:"#F3F4F6", cursor:"pointer", fontFamily:"inherit", fontSize:11, color:C.sec, fontWeight:600, marginBottom:expanded?8:0 }}>
+        {expanded?"▲ Hide Details":"▼ View Details"}
+      </button>
+      {/* Expanded detail */}
+      {expanded && (
+        <div style={{ background:"#fff", border:"1px solid "+C.border, borderRadius:8, padding:"10px", marginBottom:6 }}>
+          {(e.custName||e.custPhone) && <div style={{ fontSize:11, color:C.sec, marginBottom:6 }}>Customer: {e.custName||""}{e.custPhone?" · "+e.custPhone:""}</div>}
+          {/* Item breakdown */}
+          {(e.lines||[]).map((l,i) => {
+            const ep = parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
+            const disc = parseFloat(l.itemDiscount)||0;
+            const amt = ep*l.qty*(1-disc/100);
+            const gstAmt = l.includeGST?amt*l.gstPct:0;
+            const lineTotal = +(amt+gstAmt).toFixed(2);
+            // Profit per line (admin only)
+            let lineProfit = null;
+            if (isAdmin && l.purchaseEx) {
+              const sellExGST = l.includeGST?amt/(1+l.gstPct):amt;
+              lineProfit = +((sellExGST/l.qty - l.purchaseEx)*l.qty).toFixed(2);
+            }
+            const pt = [{id:"rl",col:C.rl},{id:"dm",col:C.dm},{id:"pl",col:C.pl},{id:"sdm",col:C.sdm}].find(p=>p.id===l.priceType);
+            return (
+              <div key={l.id||i} style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"6px 0", borderBottom:"1px solid #F3F4F6" }}>
+                <div style={{ flex:1, paddingRight:8 }}>
+                  <div style={{ fontSize:12, fontWeight:600 }}>{l.name}</div>
+                  <div style={{ fontSize:10, color:C.mute }}>
+                    {l.qty} × {fp(ep)}
+                    {disc>0?" − "+disc+"%":""}
+                    {l.includeGST?" + GST":""}
+                    {pt&&<span style={{ color:pt.col, fontWeight:700 }}> [{l.priceType.toUpperCase()}]</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:12, fontWeight:700 }}>{fp(lineTotal)}</div>
+                  {isAdmin && lineProfit!==null && <div style={{ fontSize:10, color:C.profit, fontWeight:700 }}>+{fp(lineProfit)}</div>}
+                </div>
+              </div>
+            );
+          })}
+          {/* Totals */}
+          <div style={{ marginTop:8, paddingTop:6, borderTop:"1px solid "+C.border }}>
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Subtotal</span><span>{fp(e.subtotal)}</span></div>
+            {e.billGST && <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.amb, marginBottom:2 }}><span>GST ({((e.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(e.billGSTAmt)}</span></div>}
+            {e.otherAmt>0 && <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>{e.otherLabel||"Other"}</span><span>{fp(e.otherAmt)}</span></div>}
+            {e.adjustment ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Adjustment</span><span>{e.adjustment>0?"+":""}{fp(e.adjustment)}</span></div> : null}
+            {e.roundOff ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Round Off</span><span>{e.roundOff>0?"+":""}{fp(e.roundOff)}</span></div> : null}
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:14, fontWeight:900, color:C.navy, borderTop:"1px solid "+C.border, paddingTop:5, marginTop:3 }}><span>TOTAL</span><span>{fp(e.grandTotal)}</span></div>
+            {isAdmin && e.totalProfit!=null && <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, fontWeight:700, color:C.profit, marginTop:4, background:C.profBg, padding:"5px 8px", borderRadius:6 }}><span>💰 Total Profit</span><span>{fp(e.totalProfit)}</span></div>}
+          </div>
+          {e.narration && <div style={{ fontSize:11, color:C.sec, fontStyle:"italic", marginTop:6 }}>Note: {e.narration}</div>}
+        </div>
+      )}
+      {!cancelled && (
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+          {settings && <a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(e,settings.co)} target="_blank" rel="noopener noreferrer" style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #25D366",background:"#F0FFF4",color:"#15803D",fontWeight:700,fontSize:11,textDecoration:"none" }}>💬 WA</a>}
+          {canEdit && onLoadEstimate && <button onClick={()=>{ onLoadEstimate(e); }} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.blue,background:"#EFF6FF",color:C.blue,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>✏️ Edit</button>}
+          {isAdmin && <button onClick={()=>cancelEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.amb,background:C.ambBg,color:C.amb,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Cancel</button>}
+          {isAdmin && <button onClick={()=>deleteEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Delete</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, settings, onLoadEstimate }) {
   const now = Date.now();
   const H24 = 24*60*60*1000;
@@ -1727,33 +1817,7 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
             const cancelled=e.status==="cancelled";
             const age=now-new Date(e.createdAt).getTime();
             const canEdit=isAdmin||age<H24;
-            return (
-              <div key={e.id} style={{ background:cancelled?"#FFF5F5":"#F9FAFB",border:"1px solid "+(cancelled?"#FCA5A5":C.border),borderRadius:10,padding:"12px",marginBottom:8,opacity:cancelled?0.75:1 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      <span style={{ fontWeight:800,fontSize:14,color:C.navy }}>{e.number}</span>
-                      {cancelled&&<span style={{ fontSize:10,color:C.red,fontWeight:800,background:C.redBg,padding:"1px 6px",borderRadius:4 }}>CANCELLED</span>}
-                      {!isAdmin&&age>=H24&&age<H48&&<span style={{ fontSize:10,color:C.mute,background:"#F3F4F6",padding:"1px 6px",borderRadius:4 }}>View only</span>}
-                    </div>
-                    <div style={{ fontSize:11,color:C.sec,marginTop:2 }}>{e.salesmanName}{e.custName?" · "+e.custName:""}{e.custPhone?" · "+e.custPhone:""}</div>
-                    <div style={{ fontSize:10,color:C.mute,marginTop:2 }}>{fmtDateTime(e.createdAt)} · {e.lines.length} item{e.lines.length!==1?"s":""}</div>
-                  </div>
-                  <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:16,fontWeight:900,color:C.navy }}>{fp(e.grandTotal)}</div>
-                    {isAdmin&&e.totalProfit!=null&&<div style={{ fontSize:11,color:C.profit,fontWeight:700 }}>+{fp(e.totalProfit)}</div>}
-                  </div>
-                </div>
-                {!cancelled&&(
-                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                    {settings&&<a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(e,settings.co)} target="_blank" rel="noopener noreferrer" style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #25D366",background:"#F0FFF4",color:"#15803D",fontWeight:700,fontSize:11,textDecoration:"none" }}>💬 WA</a>}
-                    {canEdit&&onLoadEstimate&&<button onClick={()=>{ onLoadEstimate(e); onClose(); }} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.blue,background:"#EFF6FF",color:C.blue,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>✏️ Edit</button>}
-                    {isAdmin&&<button onClick={()=>cancelEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.amb,background:C.ambBg,color:C.amb,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Cancel</button>}
-                    {isAdmin&&<button onClick={()=>deleteEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Delete</button>}
-                  </div>
-                )}
-              </div>
-            );
+            return <EstimateCard key={e.id} e={e} cancelled={cancelled} age={age} canEdit={canEdit} isAdmin={isAdmin} H24={H24} H48={H48} settings={settings} onLoadEstimate={onLoadEstimate} cancelEst={cancelEst} deleteEst={deleteEst} />;
           })}
         </div>
       </div>
