@@ -1195,7 +1195,39 @@ const PRICE_TYPES = [
   { id:"sdm", label:"SDM", col:C.sdm, bg:C.sdmBg },
 ];
 
-function EstimateView({ brands, items, settings, estimates, onEstimatesSave }) {
+// ── WHATSAPP HELPER ───────────────────────────────────────────────
+const WA_NUMBER = "917532002298";
+function buildWAText(est, co) {
+  let msg = `*ESTIMATE — ${est.number}*\n${co}\nDate: ${fmtDate(est.createdAt)}\nSalesman: ${est.salesmanName}`;
+  if (est.custName)  msg += `\nCustomer: ${est.custName}`;
+  if (est.custPhone) msg += ` | ${est.custPhone}`;
+  msg += `\n\n*Items:*`;
+  (est.lines||[]).forEach(l => {
+    const effP = parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
+    const disc = parseFloat(l.itemDiscount)||0;
+    const amt  = effP * l.qty * (1 - disc/100);
+    msg += `\n• ${l.name} × ${l.qty} @ ${fp(effP)} = ${fp(amt)}`;
+    if (disc > 0) msg += ` (${disc}% off)`;
+    if (l.includeGST) msg += ` +${((l.gstPct||0.05)*100).toFixed(0)}% GST`;
+  });
+  msg += `\n\nSubtotal: ${fp(est.subtotal)}`;
+  if (est.billGST)    msg += `\nGST: ${fp(est.billGSTAmt)}`;
+  if (est.otherAmt)   msg += `\n${est.otherLabel||"Other"}: ${fp(est.otherAmt)}`;
+  if (est.adjustment) msg += `\nAdjustment: ${est.adjustment>0?"+":""}${fp(est.adjustment)}`;
+  msg += `\n*TOTAL: ${fp(est.grandTotal)}*`;
+  if (est.narration)  msg += `\n\nNote: ${est.narration}`;
+  return encodeURIComponent(msg);
+}
+
+const PRINT_CSS = `
+@media print {
+  body > * { display: none !important; }
+  #vkf-print-area { display: block !important; position: static !important; }
+}
+`;
+
+// ── ESTIMATE VIEW ─────────────────────────────────────────────────
+function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isAdmin }) {
   const salesmen = settings.salesmen || [];
   const prefix   = settings.estimatePrefix || "VKF";
 
@@ -1204,7 +1236,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave }) {
   const [custPhone,    setCustPhone]    = useState("");
   const [search,       setSearch]       = useState("");
   const [cartLines,    setCartLines]    = useState([]);
+  const [defaultPT,    setDefaultPT]    = useState("");
   const [billGST,      setBillGST]      = useState(false);
+  const [billGSTPct,   setBillGSTPct]   = useState(0.05);
   const [otherLabel,   setOtherLabel]   = useState("");
   const [otherAmt,     setOtherAmt]     = useState("");
   const [adjustment,   setAdjustment]   = useState("");
@@ -1212,19 +1246,29 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave }) {
   const [pricePopup,   setPricePopup]   = useState(null);
   const [saved,        setSaved]        = useState(null);
   const [showHistory,  setShowHistory]  = useState(false);
+  const [editingLine,  setEditingLine]  = useState(null);
+  const [customPriceInput, setCustomPriceInput] = useState("");
 
-  // Pick up item passed from Prices tab
+  useEffect(() => {
+    if (!document.getElementById("vkf-print-css")) {
+      const s = document.createElement("style");
+      s.id = "vkf-print-css"; s.textContent = PRINT_CSS;
+      document.head.appendChild(s);
+    }
+  }, []);
+
   useEffect(() => {
     if (window._pendingEstimateItem) {
       const { item, priceType } = window._pendingEstimateItem;
       window._pendingEstimateItem = null;
-      const prices = { rl: item.rl, dm: item.dm, pl: item.pl, sdm: item.sdmInc||item.sdm };
+      const prices = { rl:item.rl, dm:item.dm, pl:item.pl, sdm:item.sdmInc||item.sdm };
       const up = prices[priceType];
       if (up) {
+        if (!defaultPT) setDefaultPT(priceType);
         setCartLines(p => {
           const ex = p.find(l => l.itemId===item.id && l.priceType===priceType);
           if (ex) return p.map(l => l.itemId===item.id&&l.priceType===priceType?{...l,qty:l.qty+1}:l);
-          return [...p, { id:uid(), itemId:item.id, name:item.name, priceType, unitPrice:up, qty:1, itemDiscount:"", includeGST:false, gstPct:item.gst||0.05 }];
+          return [...p, { id:uid(), itemId:item.id, name:item.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:item.gst||0.05, _it:item }];
         });
         toast(item.name + " added to estimate");
       }
@@ -1243,325 +1287,404 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave }) {
     : [];
 
   function addToCart(it, priceType) {
-    const prices = { rl: it.rl, dm: it.dm, pl: it.pl, sdm: it.sdmInc||it.sdm };
+    const prices = { rl:it.rl, dm:it.dm, pl:it.pl, sdm:it.sdmInc||it.sdm };
     const up = prices[priceType];
-    if (!up) return toast("No price set for " + priceType.toUpperCase() + " on this item","warn");
+    if (!up) return toast("No price set for " + priceType.toUpperCase(),"warn");
+    if (!defaultPT) setDefaultPT(priceType);
     setCartLines(p => {
       const ex = p.find(l => l.itemId===it.id && l.priceType===priceType);
-      if (ex) return p.map(l => l.itemId===it.id&&l.priceType===priceType ? {...l, qty:l.qty+1} : l);
-      return [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05 }];
+      if (ex) return p.map(l => l.itemId===it.id&&l.priceType===priceType?{...l,qty:l.qty+1}:l);
+      return [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05, _it:it }];
     });
-    setPricePopup(null);
-    setSearch("");
-    toast(it.name + " added","ok");
+    setPricePopup(null); setSearch("");
+    toast(it.name + " added");
   }
+
+  function effPrice(l) { const cp=parseFloat(l.customPrice); return (!isNaN(cp)&&cp>0)?cp:l.unitPrice; }
 
   function lineTotal(l) {
-    const base = l.unitPrice * l.qty;
+    const base = effPrice(l) * l.qty;
     const disc = parseFloat(l.itemDiscount)||0;
-    const afterDisc = base * (1 - disc/100);
-    const gst = l.includeGST ? afterDisc * l.gstPct : 0;
-    return +(afterDisc + gst).toFixed(2);
+    const afterDisc = base*(1-disc/100);
+    return +(afterDisc + (l.includeGST?afterDisc*l.gstPct:0)).toFixed(2);
   }
 
-  const subtotal    = cartLines.reduce((s,l) => s + lineTotal(l), 0);
-  const billGSTAmt  = billGST ? +(subtotal * 0.05).toFixed(2) : 0;
+  function lineProfit(l) {
+    if (!l._it||!l._it.purchaseEx) return null;
+    const ep = effPrice(l); const disc=parseFloat(l.itemDiscount)||0;
+    const sellAfterDisc = ep*(1-disc/100);
+    const sellExGST = l.includeGST ? sellAfterDisc/(1+l.gstPct) : sellAfterDisc;
+    return +((sellExGST-l._it.purchaseEx)*l.qty).toFixed(2);
+  }
+
+  const subtotal    = cartLines.reduce((s,l)=>s+lineTotal(l),0);
+  const billGSTAmt  = billGST?+(subtotal*billGSTPct).toFixed(2):0;
   const otherAmtN   = parseFloat(otherAmt)||0;
   const adjN        = parseFloat(adjustment)||0;
-  const grandTotal  = +(subtotal + billGSTAmt + otherAmtN + adjN).toFixed(2);
+  const grandTotal  = +(subtotal+billGSTAmt+otherAmtN+adjN).toFixed(2);
+  const totalProfit = cartLines.reduce((s,l)=>{ const p=lineProfit(l); return s+(p||0); },0);
 
   function nextEstNo() {
-    const used = (estimates||[]).map(e => parseInt(e.number.replace(/[^0-9]/g,""))||0);
-    const max  = used.length ? Math.max(...used) : (settings.estimateCounter||1) - 1;
-    return prefix + "-" + String(max + 1).padStart(3,"0");
+    const used = (estimates||[]).map(e => parseInt((e.number||"").replace(/[^0-9]/g,""))||0);
+    const max  = used.length?Math.max(...used):9999;
+    return prefix+"-"+String(max+1);
   }
 
   function saveEstimate() {
     if (!salesmanName) return toast("Select salesman first","err");
     if (!cartLines.length) return toast("Add at least one item","err");
     const est = {
-      id: uid(),
-      number: nextEstNo(),
+      id:uid(), number:nextEstNo(),
       salesmanName, custName, custPhone,
-      lines: cartLines,
-      billGST, billGSTAmt,
-      otherLabel, otherAmt: otherAmtN,
-      adjustment: adjN,
-      narration,
-      subtotal, grandTotal,
-      createdAt: new Date().toISOString(),
+      lines: cartLines.map(l=>({...l,_it:undefined})),
+      billGST, billGSTPct, billGSTAmt,
+      otherLabel, otherAmt:otherAmtN,
+      adjustment:adjN, narration,
+      subtotal, grandTotal, totalProfit,
+      createdAt:new Date().toISOString(),
+      status:"active",
     };
-    const next = [...(estimates||[]), est];
-    onEstimatesSave(next);
+    onEstimatesSave([...(estimates||[]),est]);
     setSaved(est);
-    toast("Estimate " + est.number + " saved!");
+    toast("Estimate "+est.number+" saved!");
   }
 
   function clearAll() {
     setCartLines([]); setCustName(""); setCustPhone(""); setBillGST(false);
-    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null);
+    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT("");
+  }
+
+  function doPrint() {
+    const el = document.getElementById("vkf-print-area");
+    if (el) { el.style.display="block"; window.print(); setTimeout(()=>{ el.style.display="none"; },1500); }
   }
 
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
 
-  // ── Print view ──
   if (saved) {
     return (
       <div style={{ padding:"16px 16px 80px" }}>
-        <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:12, padding:"14px", marginBottom:14 }}>
-          <div style={{ fontSize:16, fontWeight:800, color:C.profit, marginBottom:4 }}>✅ {saved.number} saved!</div>
-          <div style={{ fontSize:12, color:C.profit }}>By {saved.salesmanName}{saved.custName?" · "+saved.custName:""}</div>
-        </div>
-        <div style={SS} id="print-est">
-          <div style={{ textAlign:"center", marginBottom:12 }}>
-            <div style={{ fontSize:18, fontWeight:900, color:C.navy }}>{settings.co}</div>
-            <div style={{ fontSize:11, color:C.sec }}>{settings.tag}</div>
-            <div style={{ fontSize:13, fontWeight:700, marginTop:6 }}>ESTIMATE</div>
-            <div style={{ fontSize:12, color:C.sec }}>No: {saved.number} · {fmtDate(saved.createdAt)}</div>
+        {/* Hidden clean print area */}
+        <div id="vkf-print-area" style={{ display:"none", fontFamily:"Arial,sans-serif", fontSize:13, color:"#000", padding:20 }}>
+          <div style={{ textAlign:"center", borderBottom:"2px solid #000", paddingBottom:10, marginBottom:12 }}>
+            <div style={{ fontSize:22, fontWeight:900 }}>{settings.co}</div>
+            <div style={{ fontSize:11 }}>{settings.tag}</div>
+            <div style={{ fontSize:16, fontWeight:700, marginTop:6, letterSpacing:2 }}>ESTIMATE / PERFORMA</div>
           </div>
-          {(saved.custName||saved.custPhone) && (
-            <div style={{ background:"#F8FAFF", borderRadius:8, padding:"8px 12px", marginBottom:10, fontSize:12 }}>
-              <strong>Customer:</strong> {saved.custName||""} {saved.custPhone?"· "+saved.custPhone:""}
-            </div>
-          )}
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, marginBottom:10 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12, fontSize:12 }}>
+            <div><b>Estimate No:</b> {saved.number}<br/><b>Date:</b> {fmtDate(saved.createdAt)}<br/><b>Salesman:</b> {saved.salesmanName}</div>
+            <div style={{ textAlign:"right" }}>{saved.custName?(<div><b>Customer:</b> {saved.custName}</div>):null}{saved.custPhone?(<div><b>Phone:</b> {saved.custPhone}</div>):null}</div>
+          </div>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, marginBottom:12 }}>
             <thead>
-              <tr style={{ background:"#F3F4F6" }}>
-                <th style={{ padding:"6px 8px", textAlign:"left", fontWeight:700 }}>Item</th>
-                <th style={{ padding:"6px 4px", textAlign:"center", fontWeight:700 }}>Qty</th>
-                <th style={{ padding:"6px 4px", textAlign:"right", fontWeight:700 }}>Price</th>
-                <th style={{ padding:"6px 4px", textAlign:"right", fontWeight:700 }}>Total</th>
+              <tr style={{ background:"#f0f0f0" }}>
+                <th style={{ padding:"6px 8px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
+                <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
+                <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
+                <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Disc%</th>
+                <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Amount</th>
               </tr>
             </thead>
             <tbody>
-              {saved.lines.map((l,i) => (
-                <tr key={l.id} style={{ borderBottom:"1px solid "+C.border }}>
-                  <td style={{ padding:"7px 8px" }}>
-                    <div style={{ fontWeight:600 }}>{l.name}</div>
-                    <div style={{ fontSize:10, color:C.mute }}>{l.priceType.toUpperCase()}{l.itemDiscount?` · ${l.itemDiscount}% off`:""}{l.includeGST?" · +GST":""}</div>
-                  </td>
-                  <td style={{ padding:"7px 4px", textAlign:"center" }}>{l.qty}</td>
-                  <td style={{ padding:"7px 4px", textAlign:"right" }}>{fp(l.unitPrice)}</td>
-                  <td style={{ padding:"7px 4px", textAlign:"right", fontWeight:700 }}>{fp(lineTotal(l))}</td>
-                </tr>
-              ))}
+              {saved.lines.map((l,i) => {
+                const ep = parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
+                const disc=parseFloat(l.itemDiscount)||0;
+                const amt=ep*l.qty*(1-disc/100);
+                return (
+                  <tr key={l.id} style={{ borderBottom:"1px solid #ddd" }}>
+                    <td style={{ padding:"6px 8px", border:"1px solid #ddd" }}>{l.name}{l.includeGST?" (+"+((l.gstPct||0.05)*100).toFixed(0)+"% GST)":""}</td>
+                    <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
+                    <td style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
+                    <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>
+                    <td style={{ padding:"6px 4px", textAlign:"right", fontWeight:700, border:"1px solid #ddd" }}>{fp(amt)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          <div style={{ borderTop:"2px solid "+C.border, paddingTop:8 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:4 }}><span>Subtotal</span><span style={{ fontWeight:700 }}>{fp(saved.subtotal)}</span></div>
-            {saved.billGST && <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.amb, marginBottom:4 }}><span>GST (5%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
-            {saved.otherAmt ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.sec, marginBottom:4 }}><span>{saved.otherLabel||"Other charges"}</span><span>{fp(saved.otherAmt)}</span></div> : null}
-            {saved.adjustment ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:saved.adjustment<0?C.red:C.profit, marginBottom:4 }}><span>Adjustment</span><span>{saved.adjustment>0?"+":""}{fp(saved.adjustment)}</span></div> : null}
-            <div style={{ display:"flex", justifyContent:"space-between", fontSize:16, fontWeight:900, color:C.navy, borderTop:"1px solid "+C.border, paddingTop:8, marginTop:4 }}><span>Grand Total</span><span>{fp(saved.grandTotal)}</span></div>
+          <div style={{ width:"55%", marginLeft:"auto", fontSize:13 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Subtotal</span><b>{fp(saved.subtotal)}</b></div>
+            {saved.billGST&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>GST ({((saved.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
+            {saved.otherAmt>0&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>{saved.otherLabel||"Other"}</span><span>{fp(saved.otherAmt)}</span></div>}
+            {saved.adjustment?<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Adjustment</span><span>{saved.adjustment>0?"+":""}{fp(saved.adjustment)}</span></div>:null}
+            <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", fontWeight:900, fontSize:16, borderTop:"2px solid #000" }}><span>GRAND TOTAL</span><span>{fp(saved.grandTotal)}</span></div>
           </div>
-          {saved.narration && <div style={{ marginTop:10, fontSize:11, color:C.sec, fontStyle:"italic", borderTop:"1px solid "+C.border, paddingTop:8 }}>Note: {saved.narration}</div>}
-          <div style={{ marginTop:10, fontSize:10, color:C.mute, textAlign:"center" }}>Salesman: {saved.salesmanName} · {settings.co}</div>
+          {saved.narration&&<div style={{ marginTop:12, fontSize:11, borderTop:"1px dashed #ccc", paddingTop:8 }}><b>Note:</b> {saved.narration}</div>}
+          <div style={{ marginTop:16, fontSize:10, textAlign:"center", color:"#888", borderTop:"1px dashed #ccc", paddingTop:8 }}>This is a computer generated estimate — {settings.co}</div>
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:4 }}>
-          <BtnP onClick={() => window.print()}>🖨 Print</BtnP>
-          <BtnO color={C.blue} onClick={clearAll}>+ New Estimate</BtnO>
+
+        <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:12, padding:"14px", marginBottom:14 }}>
+          <div style={{ fontSize:16, fontWeight:800, color:C.profit, marginBottom:2 }}>✅ {saved.number} saved!</div>
+          <div style={{ fontSize:12, color:C.profit }}>By {saved.salesmanName}{saved.custName?" · "+saved.custName:""}</div>
+          <div style={{ fontSize:18, fontWeight:900, color:C.navy, marginTop:4 }}>{fp(saved.grandTotal)}</div>
         </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+          <BtnP onClick={doPrint}>🖨 Print</BtnP>
+          <a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(saved,settings.co)} target="_blank" rel="noopener noreferrer"
+            style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"13px 16px", borderRadius:10, background:"#25D366", color:"#fff", fontWeight:700, fontSize:14, textDecoration:"none" }}>
+            💬 WhatsApp
+          </a>
+        </div>
+        <BtnO color={C.blue} onClick={clearAll}>+ New Estimate</BtnO>
         <div style={{ height:10 }} />
-        <BtnO onClick={() => setShowHistory(true)}>📋 View All Estimates</BtnO>
-        {showHistory && <EstimateHistory estimates={estimates} onClose={() => setShowHistory(false)} />}
+        <BtnO onClick={()=>setShowHistory(true)}>📋 View All Estimates</BtnO>
+        {showHistory&&<EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={isAdmin} onClose={()=>setShowHistory(false)} settings={settings} />}
       </div>
     );
   }
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
-      {pricePopup && (
+      {pricePopup&&(
         <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
           <div style={{ background:"#fff", borderRadius:20, padding:"22px 18px", maxWidth:340, width:"100%" }}>
             <div style={{ fontSize:15, fontWeight:800, marginBottom:4 }}>{pricePopup.name}</div>
-            <div style={{ fontSize:11, color:C.sec, marginBottom:14 }}>Select price type to add to estimate</div>
+            <div style={{ fontSize:11, color:C.sec, marginBottom:14 }}>Select price type to add</div>
             {PRICE_TYPES.map(pt => {
-              const prices = { rl:pricePopup.rl, dm:pricePopup.dm, pl:pricePopup.pl, sdm:pricePopup.sdmInc||pricePopup.sdm };
-              const pv = prices[pt.id];
-              if (!pv) return null;
+              const prices={rl:pricePopup.rl,dm:pricePopup.dm,pl:pricePopup.pl,sdm:pricePopup.sdmInc||pricePopup.sdm};
+              const pv=prices[pt.id]; if(!pv)return null;
               return (
-                <button key={pt.id} onClick={() => addToCart(pricePopup, pt.id)}
+                <button key={pt.id} onClick={()=>addToCart(pricePopup,pt.id)}
                   style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%", padding:"13px 16px", borderRadius:10, border:"1.5px solid "+pt.col, background:pt.bg, cursor:"pointer", fontFamily:"inherit", marginBottom:8 }}>
-                  <span style={{ fontWeight:700, color:pt.col, fontSize:14 }}>{pt.label}</span>
+                  <span style={{ fontWeight:700, color:pt.col, fontSize:14 }}>{pt.label}{defaultPT===pt.id?" ✓":""}</span>
                   <span style={{ fontWeight:900, color:pt.col, fontSize:16 }}>{fp(pv)}</span>
                 </button>
               );
             })}
-            <BtnO onClick={() => setPricePopup(null)} style={{ marginTop:4 }}>Cancel</BtnO>
+            <BtnO onClick={()=>setPricePopup(null)} style={{ marginTop:4 }}>Cancel</BtnO>
           </div>
         </div>
       )}
 
-      {/* Header info */}
+      {editingLine&&(
+        <div style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:"#fff", borderRadius:18, padding:"22px 18px", maxWidth:300, width:"100%" }}>
+            <div style={{ fontSize:14, fontWeight:800, marginBottom:4 }}>✏️ Custom Price</div>
+            <div style={{ fontSize:11, color:C.sec, marginBottom:12 }}>{cartLines.find(l=>l.id===editingLine)?.name}</div>
+            <Fld label="Custom Price ₹" hint={"Original: "+fp(cartLines.find(l=>l.id===editingLine)?.originalPrice)}>
+              <input style={INP} type="number" step="1" placeholder="Enter custom price..."
+                value={customPriceInput} onChange={e=>setCustomPriceInput(e.target.value)} autoFocus />
+            </Fld>
+            <div style={{ display:"flex", gap:8 }}>
+              <BtnO onClick={()=>{ setCartLines(p=>p.map(l=>l.id===editingLine?{...l,customPrice:""}:l)); setEditingLine(null); setCustomPriceInput(""); }}>Reset</BtnO>
+              <BtnP onClick={()=>{ setCartLines(p=>p.map(l=>l.id===editingLine?{...l,customPrice:customPriceInput}:l)); setEditingLine(null); setCustomPriceInput(""); }}>Apply</BtnP>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={SS}>
         <div style={{ fontSize:13, fontWeight:800, color:C.navy, marginBottom:12 }}>🧾 New Estimate</div>
         <Fld label="Salesman *">
-          <select style={SEL} value={salesmanName} onChange={e => setSalesmanName(e.target.value)}>
+          <select style={SEL} value={salesmanName} onChange={e=>setSalesmanName(e.target.value)}>
             <option value="">— Select Salesman —</option>
-            {salesmen.map(s => <option key={s} value={s}>{s}</option>)}
+            {salesmen.map(s=><option key={s} value={s}>{s}</option>)}
           </select>
         </Fld>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-          <Fld label="Customer Name"><input style={INP} placeholder="Name (optional)" value={custName} onChange={e => setCustName(e.target.value)} /></Fld>
-          <Fld label="Phone"><input style={INP} placeholder="Phone (optional)" value={custPhone} onChange={e => setCustPhone(e.target.value)} /></Fld>
+          <Fld label="Customer Name"><input style={INP} placeholder="Name (optional)" value={custName} onChange={e=>setCustName(e.target.value)} /></Fld>
+          <Fld label="Phone"><input style={INP} placeholder="Phone (optional)" value={custPhone} onChange={e=>setCustPhone(e.target.value)} /></Fld>
         </div>
+        {defaultPT&&(
+          <div style={{ background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:8, padding:"7px 11px", fontSize:12, color:C.blue, fontWeight:600 }}>
+            🔒 Default: <strong>{defaultPT.toUpperCase()}</strong> &nbsp;
+            <button onClick={()=>setDefaultPT("")} style={{ background:"none", border:"none", color:C.blue, cursor:"pointer", fontWeight:700, textDecoration:"underline", fontFamily:"inherit", fontSize:12 }}>Change</button>
+          </div>
+        )}
       </div>
 
-      {/* Search + add items */}
       <div style={SS}>
         <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:8 }}>Add Items</div>
-        <input style={Object.assign({},INP,{marginBottom:0})} placeholder="🔍 Search item name or brand..." value={search} onChange={e => setSearch(e.target.value)} />
-        {searchResults.length > 0 && (
+        <input style={Object.assign({},INP,{marginBottom:0})} placeholder="🔍 Search item name or brand..." value={search} onChange={e=>setSearch(e.target.value)} />
+        {searchResults.length>0&&(
           <div style={{ marginTop:6, maxHeight:220, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9 }}>
-            {searchResults.map(it => (
-              <button key={it.id} onClick={() => setPricePopup(it)}
+            {searchResults.map(it=>(
+              <button key={it.id} onClick={()=>{ defaultPT?addToCart(it,defaultPT):setPricePopup(it); }}
                 style={{ display:"flex", justifyContent:"space-between", alignItems:"center", width:"100%", padding:"10px 12px", background:"#fff", border:"none", borderBottom:"1px solid "+C.border, cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}>
                 <div>
                   <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{it.name}</div>
                   <div style={{ fontSize:10, color:C.mute }}>{it.cat}{it._b?" · "+it._b.code:""}</div>
                 </div>
-                <span style={{ fontSize:11, color:C.blue, fontWeight:700 }}>+ Add</span>
+                <span style={{ fontSize:11, color:C.blue, fontWeight:700 }}>{defaultPT?"+ Add ("+defaultPT.toUpperCase()+")":"+ Select Price"}</span>
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Cart lines */}
-      {cartLines.length > 0 && (
+      {cartLines.length>0&&(
         <div style={SS}>
           <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:10 }}>Cart ({cartLines.length} item{cartLines.length!==1?"s":""})</div>
-          {cartLines.map((l, idx) => {
-            const pt = PRICE_TYPES.find(p => p.id===l.priceType)||PRICE_TYPES[0];
+          {cartLines.map(l=>{
+            const pt=PRICE_TYPES.find(p=>p.id===l.priceType)||PRICE_TYPES[0];
+            const ep=effPrice(l); const hasCustom=parseFloat(l.customPrice)>0;
             return (
               <div key={l.id} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"11px 12px", marginBottom:8 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
                   <div style={{ flex:1, paddingRight:8 }}>
                     <div style={{ fontSize:13, fontWeight:700 }}>{l.name}</div>
-                    <div style={{ display:"inline-block", background:pt.bg, color:pt.col, border:"1px solid "+pt.col, borderRadius:20, padding:"1px 8px", fontSize:10, fontWeight:800, marginTop:3 }}>{pt.label} · {fp(l.unitPrice)}</div>
+                    <div style={{ display:"flex", gap:5, alignItems:"center", marginTop:3, flexWrap:"wrap" }}>
+                      <div style={{ background:pt.bg, color:pt.col, border:"1px solid "+pt.col, borderRadius:20, padding:"1px 8px", fontSize:10, fontWeight:800 }}>{pt.label} · {fp(ep)}{hasCustom?" ✏️":""}</div>
+                      {PRICE_TYPES.map(p2=>{
+                        const prices2={rl:l._it&&l._it.rl,dm:l._it&&l._it.dm,pl:l._it&&l._it.pl,sdm:l._it&&(l._it.sdmInc||l._it.sdm)};
+                        if(!prices2[p2.id]||p2.id===l.priceType)return null;
+                        return <button key={p2.id} onClick={()=>setCartLines(prev=>prev.map(x=>x.id===l.id?{...x,priceType:p2.id,unitPrice:prices2[p2.id],originalPrice:prices2[p2.id],customPrice:""}:x))} style={{ fontSize:9,padding:"1px 5px",borderRadius:4,border:"1px solid "+p2.col,background:p2.bg,color:p2.col,cursor:"pointer",fontFamily:"inherit",fontWeight:700 }}>{p2.label}</button>;
+                      })}
+                      <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:11, background:"none", border:"none", cursor:"pointer", color:C.sec, padding:0 }}>✏️</button>
+                    </div>
                   </div>
-                  <button onClick={() => setCartLines(p => p.filter(x => x.id!==l.id))} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:13, color:C.red, fontFamily:"inherit" }}>✕</button>
+                  <button onClick={()=>setCartLines(p=>p.filter(x=>x.id!==l.id))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid #FCA5A5",background:C.redBg,cursor:"pointer",fontSize:13,color:C.red,fontFamily:"inherit" }}>✕</button>
                 </div>
-                {/* Qty + discount + GST */}
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"auto 1fr 1fr", gap:8, alignItems:"end" }}>
                   <div>
-                    <div style={{ fontSize:10, color:C.sec, fontWeight:700, marginBottom:3 }}>QTY</div>
+                    <div style={{ fontSize:10,color:C.sec,fontWeight:700,marginBottom:3 }}>QTY</div>
                     <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                      <button onClick={() => setCartLines(p => p.map(x => x.id===l.id?{...x,qty:Math.max(1,x.qty-1)}:x))} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid "+C.border, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:14 }}>−</button>
-                      <input type="number" min="1" value={l.qty} onChange={e => setCartLines(p => p.map(x => x.id===l.id?{...x,qty:Math.max(1,parseInt(e.target.value)||1)}:x))}
-                        style={{ width:40, textAlign:"center", padding:"5px 2px", borderRadius:6, border:"1.5px solid "+C.border, fontSize:13, fontWeight:700, fontFamily:"inherit" }} />
-                      <button onClick={() => setCartLines(p => p.map(x => x.id===l.id?{...x,qty:x.qty+1}:x))} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid "+C.border, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:14 }}>+</button>
+                      <button onClick={()=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:Math.max(1,x.qty-1)}:x))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid "+C.border,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14 }}>−</button>
+                      <input type="number" min="1" value={l.qty} onChange={e=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:Math.max(1,parseInt(e.target.value)||1)}:x))} style={{ width:40,textAlign:"center",padding:"5px 2px",borderRadius:6,border:"1.5px solid "+C.border,fontSize:13,fontWeight:700,fontFamily:"inherit" }} />
+                      <button onClick={()=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:x.qty+1}:x))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid "+C.border,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14 }}>+</button>
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize:10, color:C.sec, fontWeight:700, marginBottom:3 }}>DISC %</div>
-                    <input type="number" min="0" max="100" placeholder="0" value={l.itemDiscount}
-                      onChange={e => setCartLines(p => p.map(x => x.id===l.id?{...x,itemDiscount:e.target.value}:x))}
-                      style={{ width:"100%", padding:"7px 8px", borderRadius:6, border:"1.5px solid "+C.border, fontSize:12, fontFamily:"inherit" }} />
+                    <div style={{ fontSize:10,color:C.sec,fontWeight:700,marginBottom:3 }}>DISC %</div>
+                    <input type="number" min="0" max="100" placeholder="0" value={l.itemDiscount} onChange={e=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,itemDiscount:e.target.value}:x))} style={{ width:"100%",padding:"7px 8px",borderRadius:6,border:"1.5px solid "+C.border,fontSize:12,fontFamily:"inherit" }} />
                   </div>
                   <div>
-                    <div style={{ fontSize:10, color:C.sec, fontWeight:700, marginBottom:3 }}>+GST</div>
-                    <button onClick={() => setCartLines(p => p.map(x => x.id===l.id?{...x,includeGST:!x.includeGST}:x))}
-                      style={{ padding:"6px 10px", borderRadius:6, border:"1.5px solid "+(l.includeGST?C.amb:C.border), background:l.includeGST?C.ambBg:"#fff", color:l.includeGST?C.amb:C.sec, fontWeight:700, fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>
-                      {l.includeGST?"ON":"OFF"}
-                    </button>
+                    <div style={{ fontSize:10,color:C.sec,fontWeight:700,marginBottom:3 }}>+GST</div>
+                    <div style={{ display:"flex", gap:4 }}>
+                      <button onClick={()=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,includeGST:!x.includeGST}:x))}
+                        style={{ padding:"5px 8px",borderRadius:6,border:"1.5px solid "+(l.includeGST?C.amb:C.border),background:l.includeGST?C.ambBg:"#fff",color:l.includeGST?C.amb:C.sec,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>
+                        {l.includeGST?"ON":"OFF"}
+                      </button>
+                      {l.includeGST&&(
+                        <select value={l.gstPct} onChange={e=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,gstPct:parseFloat(e.target.value)}:x))}
+                          style={{ padding:"5px 4px",borderRadius:6,border:"1.5px solid "+C.amb,fontSize:11,fontFamily:"inherit",background:C.ambBg,color:C.amb,fontWeight:700 }}>
+                          <option value={0.05}>5%</option><option value={0.12}>12%</option><option value={0.18}>18%</option>
+                        </select>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div style={{ marginTop:6, textAlign:"right", fontSize:12, fontWeight:800, color:C.navy }}>Line total: {fp(lineTotal(l))}</div>
+                <div style={{ marginTop:6, display:"flex", justifyContent:"space-between" }}>
+                  <div style={{ fontSize:12,fontWeight:800,color:C.navy }}>Line total: {fp(lineTotal(l))}</div>
+                  {isAdmin&&lineProfit(l)!==null&&<div style={{ fontSize:11,fontWeight:700,color:C.profit }}>Profit: {fp(lineProfit(l))}</div>}
+                </div>
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Bill totals */}
-      {cartLines.length > 0 && (
+      {cartLines.length>0&&(
         <div style={SS}>
-          <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:12 }}>Bill Summary</div>
-          <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:10 }}>
-            <span style={{ color:C.sec }}>Subtotal</span><span style={{ fontWeight:800 }}>{fp(subtotal)}</span>
-          </div>
-          {/* Bill-level GST */}
+          <div style={{ fontSize:12,fontWeight:800,color:C.navy,marginBottom:12 }}>Bill Summary</div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:10 }}><span style={{ color:C.sec }}>Subtotal</span><span style={{ fontWeight:800 }}>{fp(subtotal)}</span></div>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-            <div>
-              <div style={{ fontSize:12, fontWeight:700 }}>Add GST (5%) on bill</div>
-              <div style={{ fontSize:10, color:C.mute }}>Optional — adds 5% on subtotal</div>
+            <div><div style={{ fontSize:12,fontWeight:700 }}>Add GST on bill</div><div style={{ fontSize:10,color:C.mute }}>Optional</div></div>
+            <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+              <button onClick={()=>setBillGST(p=>!p)} style={{ padding:"7px 14px",borderRadius:20,border:"1.5px solid "+(billGST?C.amb:C.border),background:billGST?C.ambBg:"#fff",color:billGST?C.amb:C.sec,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit" }}>{billGST?"ON":"OFF"}</button>
+              {billGST&&(<select value={billGSTPct} onChange={e=>setBillGSTPct(parseFloat(e.target.value))} style={{ padding:"7px 8px",borderRadius:8,border:"1.5px solid "+C.amb,fontSize:12,fontFamily:"inherit",background:C.ambBg,color:C.amb,fontWeight:700 }}><option value={0.05}>5%</option><option value={0.12}>12%</option><option value={0.18}>18%</option></select>)}
+              {billGST&&<span style={{ fontSize:12,fontWeight:700,color:C.amb }}>{fp(billGSTAmt)}</span>}
             </div>
-            <button onClick={() => setBillGST(p=>!p)}
-              style={{ padding:"7px 16px", borderRadius:20, border:"1.5px solid "+(billGST?C.amb:C.border), background:billGST?C.ambBg:"#fff", color:billGST?C.amb:C.sec, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
-              {billGST?"ON · "+fp(billGSTAmt):"OFF"}
-            </button>
           </div>
-          {/* Other charges */}
           <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:8, marginBottom:10 }}>
-            <Fld label="Other Charges Label">
-              <input style={INP} placeholder="e.g. Packing, Transport" value={otherLabel} onChange={e => setOtherLabel(e.target.value)} />
-            </Fld>
-            <Fld label="Amount ₹">
-              <input style={INP} type="number" placeholder="0" value={otherAmt} onChange={e => setOtherAmt(e.target.value)} />
-            </Fld>
+            <Fld label="Other Charges"><input style={INP} placeholder="e.g. Packing" value={otherLabel} onChange={e=>setOtherLabel(e.target.value)} /></Fld>
+            <Fld label="Amount ₹"><input style={INP} type="number" placeholder="0" value={otherAmt} onChange={e=>setOtherAmt(e.target.value)} /></Fld>
           </div>
-          {/* Adjustment */}
-          <Fld label="Adjustment ₹ (use − for discount)" hint="e.g. −50 for discount, +20 for rounding">
-            <input style={INP} type="number" placeholder="e.g. -50 or +20" value={adjustment} onChange={e => setAdjustment(e.target.value)} />
-          </Fld>
-          {/* Narration */}
-          <Fld label="Narration / Note">
-            <input style={INP} placeholder="e.g. Cash payment, delivery pending..." value={narration} onChange={e => setNarration(e.target.value)} />
-          </Fld>
-          {/* Grand total */}
+          <Fld label="Adjustment ₹" hint="Use − for discount"><input style={INP} type="number" placeholder="e.g. -50" value={adjustment} onChange={e=>setAdjustment(e.target.value)} /></Fld>
+          <Fld label="Narration / Note"><input style={INP} placeholder="e.g. Cash payment..." value={narration} onChange={e=>setNarration(e.target.value)} /></Fld>
           <div style={{ display:"flex", justifyContent:"space-between", background:C.navy, borderRadius:10, padding:"13px 16px", marginTop:4 }}>
-            <span style={{ color:"#fff", fontSize:15, fontWeight:700 }}>Grand Total</span>
-            <span style={{ color:"#fff", fontSize:20, fontWeight:900 }}>{fp(grandTotal)}</span>
+            <span style={{ color:"#fff",fontSize:15,fontWeight:700 }}>Grand Total</span>
+            <span style={{ color:"#fff",fontSize:20,fontWeight:900 }}>{fp(grandTotal)}</span>
           </div>
+          {isAdmin&&(<div style={{ background:C.profBg,border:"1px solid #BBF7D0",borderRadius:8,padding:"8px 12px",marginTop:8,display:"flex",justifyContent:"space-between" }}><span style={{ fontSize:12,fontWeight:700,color:C.profit }}>💰 Estimated Profit</span><span style={{ fontSize:14,fontWeight:900,color:C.profit }}>{fp(totalProfit)}</span></div>)}
         </div>
       )}
 
-      {cartLines.length > 0 && (
-        <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10 }}>
-          <BtnP color={C.profit} onClick={saveEstimate}>💾 Save Estimate</BtnP>
-          <BtnO color={C.red} onClick={clearAll}>Clear</BtnO>
-        </div>
-      )}
+      {cartLines.length>0&&(<div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10 }}><BtnP color={C.profit} onClick={saveEstimate}>💾 Save Estimate</BtnP><BtnO color={C.red} onClick={clearAll}>Clear</BtnO></div>)}
       <div style={{ height:12 }} />
-      <BtnO onClick={() => setShowHistory(true)}>📋 View All Estimates</BtnO>
-      {showHistory && <EstimateHistory estimates={estimates} onClose={() => setShowHistory(false)} />}
+      <BtnO onClick={()=>setShowHistory(true)}>📋 View All Estimates</BtnO>
+      {showHistory&&<EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={isAdmin} onClose={()=>setShowHistory(false)} settings={settings} />}
     </div>
   );
 }
 
 // ── ESTIMATE HISTORY MODAL ────────────────────────────────────────
-function EstimateHistory({ estimates, onClose }) {
-  const list = (estimates||[]).slice().reverse();
+function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, settings }) {
+  const now = Date.now();
+  const H24 = 24*60*60*1000;
+  const H48 = 48*60*60*1000;
+
+  const list = (estimates||[]).slice().reverse().filter(e => {
+    if (isAdmin) return true;
+    return now - new Date(e.createdAt).getTime() < H48;
+  });
+
   const today = new Date().toDateString();
   const todayList = list.filter(e => new Date(e.createdAt).toDateString()===today);
+
+  function cancelEst(id) {
+    onEstimatesSave((estimates||[]).map(e=>e.id===id?{...e,status:"cancelled"}:e));
+    toast("Cancelled","warn");
+  }
+  function deleteEst(id) {
+    onEstimatesSave((estimates||[]).filter(e=>e.id!==id));
+    toast("Deleted","warn");
+  }
+
   return (
     <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
-      <div style={{ background:"#fff", borderRadius:20, padding:"20px 16px", maxWidth:420, width:"100%", maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
+      <div style={{ background:"#fff", borderRadius:20, padding:"20px 16px", maxWidth:440, width:"100%", maxHeight:"90vh", display:"flex", flexDirection:"column" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-          <div style={{ fontSize:16, fontWeight:800 }}>📋 All Estimates</div>
-          <button onClick={onClose} style={{ width:32, height:32, borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:15, color:C.sec, fontFamily:"inherit" }}>✕</button>
+          <div style={{ fontSize:16, fontWeight:800 }}>📋 {isAdmin?"All Estimates":"Your Estimates"}</div>
+          <button onClick={onClose} style={{ width:32,height:32,borderRadius:8,border:"1.5px solid "+C.border,background:"#F9FAFB",cursor:"pointer",fontSize:15,color:C.sec,fontFamily:"inherit" }}>✕</button>
         </div>
-        {todayList.length>0 && <div style={{ fontSize:12, color:C.profit, fontWeight:700, marginBottom:8 }}>Today: {todayList.length} estimate{todayList.length!==1?"s":""} · {fp(todayList.reduce((s,e)=>s+e.grandTotal,0))}</div>}
+        {todayList.length>0&&(
+          <div style={{ background:C.profBg,border:"1px solid #BBF7D0",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12 }}>
+            <span style={{ fontWeight:700,color:C.profit }}>Today: {todayList.length} · {fp(todayList.filter(e=>e.status!=="cancelled").reduce((s,e)=>s+e.grandTotal,0))}</span>
+            {isAdmin&&<span style={{ color:C.profit,marginLeft:8 }}>· Profit: {fp(todayList.filter(e=>e.status!=="cancelled").reduce((s,e)=>s+(e.totalProfit||0),0))}</span>}
+          </div>
+        )}
+        {!isAdmin&&<div style={{ fontSize:11,color:C.mute,marginBottom:8 }}>Showing last 48 hours only.</div>}
         <div style={{ flex:1, overflowY:"auto" }}>
-          {list.length===0 && <div style={{ textAlign:"center", padding:36, color:C.mute }}>No estimates yet.</div>}
-          {list.map(e => (
-            <div key={e.id} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"12px", marginBottom:8 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                <div>
-                  <div style={{ fontWeight:800, fontSize:14, color:C.navy }}>{e.number}</div>
-                  <div style={{ fontSize:11, color:C.sec, marginTop:2 }}>{e.salesmanName}{e.custName?" · "+e.custName:""}{e.custPhone?" · "+e.custPhone:""}</div>
-                  <div style={{ fontSize:10, color:C.mute, marginTop:2 }}>{fmtDateTime(e.createdAt)} · {e.lines.length} item{e.lines.length!==1?"s":""}</div>
+          {list.length===0&&<div style={{ textAlign:"center",padding:36,color:C.mute }}>No estimates found.</div>}
+          {list.map(e=>{
+            const cancelled=e.status==="cancelled";
+            const age=now-new Date(e.createdAt).getTime();
+            const canEdit=isAdmin||age<H24;
+            return (
+              <div key={e.id} style={{ background:cancelled?"#FFF5F5":"#F9FAFB",border:"1px solid "+(cancelled?"#FCA5A5":C.border),borderRadius:10,padding:"12px",marginBottom:8,opacity:cancelled?0.75:1 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ fontWeight:800,fontSize:14,color:C.navy }}>{e.number}</span>
+                      {cancelled&&<span style={{ fontSize:10,color:C.red,fontWeight:800,background:C.redBg,padding:"1px 6px",borderRadius:4 }}>CANCELLED</span>}
+                      {!isAdmin&&age>=H24&&age<H48&&<span style={{ fontSize:10,color:C.mute,background:"#F3F4F6",padding:"1px 6px",borderRadius:4 }}>View only</span>}
+                    </div>
+                    <div style={{ fontSize:11,color:C.sec,marginTop:2 }}>{e.salesmanName}{e.custName?" · "+e.custName:""}{e.custPhone?" · "+e.custPhone:""}</div>
+                    <div style={{ fontSize:10,color:C.mute,marginTop:2 }}>{fmtDateTime(e.createdAt)} · {e.lines.length} item{e.lines.length!==1?"s":""}</div>
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ fontSize:16,fontWeight:900,color:C.navy }}>{fp(e.grandTotal)}</div>
+                    {isAdmin&&e.totalProfit!=null&&<div style={{ fontSize:11,color:C.profit,fontWeight:700 }}>+{fp(e.totalProfit)}</div>}
+                  </div>
                 </div>
-                <div style={{ fontSize:16, fontWeight:900, color:C.navy }}>{fp(e.grandTotal)}</div>
+                {!cancelled&&(
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                    {settings&&<a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(e,settings.co)} target="_blank" rel="noopener noreferrer" style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #25D366",background:"#F0FFF4",color:"#15803D",fontWeight:700,fontSize:11,textDecoration:"none" }}>💬 WA</a>}
+                    {isAdmin&&<button onClick={()=>cancelEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.amb,background:C.ambBg,color:C.amb,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Cancel</button>}
+                    {isAdmin&&<button onClick={()=>deleteEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Delete</button>}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
+
 
 const PRICE_FILTERS = [
   { id:"all",        label:"All Prices",   col:C.text,    bg:"#F3F4F6", br:C.border },
@@ -1809,7 +1932,7 @@ function DashboardView({ brands, items, settings, onSettingsChange, estimates })
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
-      {showEst && <EstimateHistory estimates={estimates} onClose={() => setShowEst(false)} />}
+      {showEst && <EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={true} onClose={() => setShowEst(false)} settings={settings} />}
 
       {/* Today's estimates summary */}
       {(() => {
@@ -2139,7 +2262,7 @@ function SalesmanApp({ settings, brands, items, onLogout, syncStatus, estimates,
         </div>
       )}
       {tab === "prices"   && <PriceListView brands={brands} items={items} settings={settings} isAdmin={false} onAddToEstimate={it => setAddPopupItem(it)} />}
-      {tab === "estimate" && <EstimateView  brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={onEstimatesSave} />}
+      {tab === "estimate" && <EstimateView  brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={false} />}
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
         {NAV.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2, border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", borderTop:tab===t.id?"2.5px solid "+C.blue:"2.5px solid transparent" }}>
