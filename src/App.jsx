@@ -1214,6 +1214,7 @@ function buildWAText(est, co) {
   if (est.billGST)    msg += `\nGST: ${fp(est.billGSTAmt)}`;
   if (est.otherAmt)   msg += `\n${est.otherLabel||"Other"}: ${fp(est.otherAmt)}`;
   if (est.adjustment) msg += `\nAdjustment: ${est.adjustment>0?"+":""}${fp(est.adjustment)}`;
+  if (est.roundOff)    msg += `\nRound Off: ${est.roundOff>0?"+":""}${fp(est.roundOff)}`;
   msg += `\n*TOTAL: ${fp(est.grandTotal)}*`;
   if (est.narration)  msg += `\n\nNote: ${est.narration}`;
   return encodeURIComponent(msg);
@@ -1222,8 +1223,9 @@ function buildWAText(est, co) {
 const PRINT_CSS = `
 @media print {
   body { margin: 0; }
-  #root > * { display: none !important; }
-  #vkf-print-area { display: block !important; visibility: visible !important; position: fixed; left:0; top:0; width:100%; background:#fff; z-index:99999; padding:20px; }
+  body * { visibility: hidden !important; }
+  #vkf-print-area { display: block !important; position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: #fff !important; padding: 20px !important; }
+  #vkf-print-area * { visibility: visible !important; }
 }
 `;
 
@@ -1359,7 +1361,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
   function clearAll() {
     setCartLines([]); setCustName(""); setCustPhone(""); setBillGST(false);
-    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff("");
+    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff(""); setRoundOff("");
   }
 
   function loadEstimate(est) {
