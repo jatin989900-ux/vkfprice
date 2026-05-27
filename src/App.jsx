@@ -1,6 +1,4 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import * as XLSX from "xlsx";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
@@ -1411,25 +1409,28 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     if (!el) return;
     el.style.display = "block";
     try {
+      // Dynamic imports — no build-time dependency needed
+      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+        import("jspdf"),
+        import("html2canvas"),
+      ]);
       const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:"#fff" });
       el.style.display = "none";
       const imgData = canvas.toDataURL("image/jpeg", 0.92);
       const pdf = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
       const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
       const margin = 8;
       const printW = pageW - margin*2;
       const printH = (canvas.height * printW) / canvas.width;
-      // If content fits in one page, use that; else scale to fit
-      const usedH = Math.min(printH, pageH - margin*2);
-      pdf.addImage(imgData, "JPEG", margin, margin, printW, usedH);
-      const fname = (saved?.number||"estimate").replace(/[^a-zA-Z0-9-]/g,"_");
+      const maxH = pdf.internal.pageSize.getHeight() - margin*2;
+      pdf.addImage(imgData, "JPEG", margin, margin, printW, Math.min(printH, maxH));
+      const fname = (saved ? saved.number : "estimate").replace(/[^a-zA-Z0-9-]/g,"_");
       pdf.save(fname+".pdf");
       toast("PDF downloaded!");
     } catch(err) {
       el.style.display = "none";
       console.error(err);
-      toast("PDF failed — try Print instead","err");
+      toast("PDF failed — use Print instead","err");
     }
   }
 
