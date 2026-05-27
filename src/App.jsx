@@ -1,59 +1,33 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VK Furnishing Price App</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-body{margin:0;padding:0;background:#F0F2F7;}
-@media print{.no-print{display:none!important;}}
-</style>
-</head>
-<body>
-<div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useMemo, useRef } = React;
+import { useState, useEffect, useMemo, useRef } from "react";
+import * as XLSX from "xlsx";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 
-firebase.initializeApp({
+const firebaseConfig = {
   apiKey: "AIzaSyCEJlH9aGlr0pneb7hT1sIxy1iDnQV3Y4g",
   authDomain: "vkf-price.firebaseapp.com",
   projectId: "vkf-price",
   storageBucket: "vkf-price.firebasestorage.app",
   messagingSenderId: "199170851796",
   appId: "1:199170851796:web:e2e46e279995a41b890c41"
-});
-const db = firebase.firestore();
-
-const FS = {
-  settings:  () => db.doc("vkf/settings"),
-  brands:    () => db.doc("vkf/brands"),
-  items:     () => db.doc("vkf/items"),
-  estimates: () => db.doc("vkf/estimates"),
 };
-
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+const FS  = {
+  settings:  () => doc(db, "vkf", "settings"),
+  brands:    () => doc(db, "vkf", "brands"),
+  items:     () => doc(db, "vkf", "items"),
+  estimates: () => doc(db, "vkf", "estimates"),
+};
 async function fsLoad() {
   try {
-    const [sS,bS,iS,eS] = await Promise.all([FS.settings().get(),FS.brands().get(),FS.items().get(),FS.estimates().get()]);
-    return {
-      settings: sS.exists ? sS.data().v : null,
-      brands:   bS.exists ? bS.data().v : null,
-      items:    iS.exists ? iS.data().v : null,
-      estimates:eS.exists ? eS.data().v : [],
-    };
-  } catch(e) { console.error(e); return {settings:null,brands:null,items:null,estimates:[]}; }
+    const [sS, bS, iS, eS] = await Promise.all([getDoc(FS.settings()), getDoc(FS.brands()), getDoc(FS.items()), getDoc(FS.estimates())]);
+    return { settings: sS.exists() ? sS.data().v : null, brands: bS.exists() ? bS.data().v : null, items: iS.exists() ? iS.data().v : null, estimates: eS.exists() ? eS.data().v : [] };
+  } catch (e) { console.error(e); return { settings: null, brands: null, items: null, estimates: [] }; }
 }
-
 async function fsSave(key, value) {
-  await FS[key]().set({ v: value, updatedAt: new Date().toISOString() });
+  await setDoc(FS[key](), { v: value, updatedAt: new Date().toISOString() });
 }
-
 
 // ── CONSTANTS ─────────────────────────────────────────────────────
 const VER  = "4.5";
@@ -1225,20 +1199,37 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave }) {
   const salesmen = settings.salesmen || [];
   const prefix   = settings.estimatePrefix || "VKF";
 
-  // ── state ──
   const [salesmanName, setSalesmanName] = useState("");
   const [custName,     setCustName]     = useState("");
   const [custPhone,    setCustPhone]    = useState("");
   const [search,       setSearch]       = useState("");
-  const [cartLines,    setCartLines]    = useState([]);   // { id, itemId, name, priceType, unitPrice, qty, itemDiscount, includeGST, gstPct }
+  const [cartLines,    setCartLines]    = useState([]);
   const [billGST,      setBillGST]      = useState(false);
   const [otherLabel,   setOtherLabel]   = useState("");
   const [otherAmt,     setOtherAmt]     = useState("");
   const [adjustment,   setAdjustment]   = useState("");
   const [narration,    setNarration]    = useState("");
-  const [pricePopup,   setPricePopup]   = useState(null); // enriched item
-  const [saved,        setSaved]        = useState(null); // saved estimate for print view
+  const [pricePopup,   setPricePopup]   = useState(null);
+  const [saved,        setSaved]        = useState(null);
   const [showHistory,  setShowHistory]  = useState(false);
+
+  // Pick up item passed from Prices tab
+  useEffect(() => {
+    if (window._pendingEstimateItem) {
+      const { item, priceType } = window._pendingEstimateItem;
+      window._pendingEstimateItem = null;
+      const prices = { rl: item.rl, dm: item.dm, pl: item.pl, sdm: item.sdmInc||item.sdm };
+      const up = prices[priceType];
+      if (up) {
+        setCartLines(p => {
+          const ex = p.find(l => l.itemId===item.id && l.priceType===priceType);
+          if (ex) return p.map(l => l.itemId===item.id&&l.priceType===priceType?{...l,qty:l.qty+1}:l);
+          return [...p, { id:uid(), itemId:item.id, name:item.name, priceType, unitPrice:up, qty:1, itemDiscount:"", includeGST:false, gstPct:item.gst||0.05 }];
+        });
+        toast(item.name + " added to estimate");
+      }
+    }
+  }, []);
 
   const enriched = useMemo(() => {
     return items.filter(i => i.active).map(i => {
@@ -2161,7 +2152,7 @@ function SalesmanApp({ settings, brands, items, onLogout, syncStatus, estimates,
 }
 
 // ── ROOT ──────────────────────────────────────────────────────────
-function App() {
+export default function App() {
   const [settings,   setSettings]   = useState(DEF_S);
   const [brands,     setBrands]     = useState(DEF_B);
   const [items,      setItems]      = useState(DEF_I);
@@ -2184,10 +2175,10 @@ function App() {
   useEffect(() => {
     if (!ready || listenersStarted.current) return;
     listenersStarted.current = true;
-    const unsubS = FS.settings().onSnapshot(  snap => { if (snap.exists) setSettings(s => Object.assign({}, DEF_S, snap.data().v)); }, () => setSyncStatus("offline"));
-    const unsubB = FS.brands().onSnapshot(    snap => { if (snap.exists) setBrands(snap.data().v);    }, () => setSyncStatus("offline"));
-    const unsubI = FS.items().onSnapshot(     snap => { if (snap.exists) setItems(snap.data().v);     }, () => setSyncStatus("offline"));
-    const unsubE = FS.estimates().onSnapshot( snap => { if (snap.exists) setEstimates(snap.data().v); }, () => {});
+    const unsubS = onSnapshot(FS.settings(),  snap => { if (snap.exists()) setSettings(s => Object.assign({}, DEF_S, snap.data().v)); }, () => setSyncStatus("offline"));
+    const unsubB = onSnapshot(FS.brands(),    snap => { if (snap.exists()) setBrands(snap.data().v);    }, () => setSyncStatus("offline"));
+    const unsubI = onSnapshot(FS.items(),     snap => { if (snap.exists()) setItems(snap.data().v);     }, () => setSyncStatus("offline"));
+    const unsubE = onSnapshot(FS.estimates(), snap => { if (snap.exists()) setEstimates(snap.data().v); }, () => {});
     return () => { unsubS(); unsubB(); unsubI(); unsubE(); };
   }, [ready]);
 
@@ -2207,7 +2198,7 @@ function App() {
 
   return (
     <div>
-      <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}input::placeholder{color:#CBD5E1;}button:active{opacity:0.75;transform:scale(0.97);}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}@media print{.no-print{display:none!important;}}</style>
+      <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}input::placeholder{color:#CBD5E1;}button:active{opacity:0.75;transform:scale(0.97);}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}@media print{.no-print{display:none!important;}}`}</style>
       <ToastHost />
       <div style={{ fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
         {!role               && <Login       settings={settings} onLogin={setRole} />}
@@ -2217,8 +2208,3 @@ function App() {
     </div>
   );
 }
-
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
-</body>
-</html>
