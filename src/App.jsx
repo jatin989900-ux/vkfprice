@@ -14,22 +14,23 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 const FS  = {
-  settings: () => doc(db, "vkf", "settings"),
-  brands:   () => doc(db, "vkf", "brands"),
-  items:    () => doc(db, "vkf", "items"),
+  settings:  () => doc(db, "vkf", "settings"),
+  brands:    () => doc(db, "vkf", "brands"),
+  items:     () => doc(db, "vkf", "items"),
+  estimates: () => doc(db, "vkf", "estimates"),
 };
 async function fsLoad() {
   try {
-    const [sS, bS, iS] = await Promise.all([getDoc(FS.settings()), getDoc(FS.brands()), getDoc(FS.items())]);
-    return { settings: sS.exists() ? sS.data().v : null, brands: bS.exists() ? bS.data().v : null, items: iS.exists() ? iS.data().v : null };
-  } catch (e) { console.error(e); return { settings: null, brands: null, items: null }; }
+    const [sS, bS, iS, eS] = await Promise.all([getDoc(FS.settings()), getDoc(FS.brands()), getDoc(FS.items()), getDoc(FS.estimates())]);
+    return { settings: sS.exists() ? sS.data().v : null, brands: bS.exists() ? bS.data().v : null, items: iS.exists() ? iS.data().v : null, estimates: eS.exists() ? eS.data().v : [] };
+  } catch (e) { console.error(e); return { settings: null, brands: null, items: null, estimates: [] }; }
 }
 async function fsSave(key, value) {
   await setDoc(FS[key](), { v: value, updatedAt: new Date().toISOString() });
 }
 
 // ── CONSTANTS ─────────────────────────────────────────────────────
-const VER  = "4.4";
+const VER  = "4.5";
 const CATS = ["Bed Sheets","Comforters","Comforter Sets","Towels","Pillows","Dohars","Blankets","Top Sheets","Other Items"];
 const GST_OPTS = [{ label:"5% — Default (Textiles)", v:0.05 },{ label:"12%", v:0.12 },{ label:"18%", v:0.18 }];
 const ADDON_OPTS = [
@@ -120,7 +121,7 @@ function computeItem(item, brand, settings) {
 
 // ── DEFAULTS ──────────────────────────────────────────────────────
 // sdmPIN added
-const DEF_S = { co:"VK Furnishing", tag:"Wholesale Bedding & Textiles, Delhi NCR", defaultRL:0.18, defaultDM:null, adminPIN:"1234", salesPIN:"0000", sdmPIN:"9999", categories:CATS.slice() };
+const DEF_S = { co:"VK Furnishing", tag:"Wholesale Bedding & Textiles, Delhi NCR", defaultRL:0.18, defaultDM:null, adminPIN:"1234", salesPIN:"0000", sdmPIN:"9999", categories:CATS.slice(), salesmen:["Vikas","Amar Jatav","Pankaj","Harender"], estimatePrefix:"VKF", estimateCounter:1 };
 const DEF_B = [
   { id:"b1", code:"TRI", name:"Trident",      rlMarkup:0.22, dmMarkup:null },
   { id:"b2", code:"STH", name:"Story@Home",   rlMarkup:0.18, dmMarkup:null },
@@ -306,7 +307,7 @@ function SDMPinModal({ pin, onSuccess, onClose }) {
 }
 
 // ── ITEM CARD ─────────────────────────────────────────────────────
-function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick }) {
+function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick, onAddToEstimate }) {
   const filter = priceFilter || "all";
   const single = filter !== "all" && filter !== "highlights";
   const isNew    = it.createdAt && it.updatedAt && sameDay(it.createdAt, it.updatedAt);
@@ -398,6 +399,11 @@ function ItemCard({ it, isAdmin, showDate, priceFilter, sdmUnlocked, onSDMClick 
         </div>
       )}
       {it.notes && <div style={{ marginTop:7, fontSize:11, color:C.mute, fontStyle:"italic" }}>{"📝 " + it.notes}</div>}
+      {onAddToEstimate && (
+        <button onClick={() => onAddToEstimate(it)} style={{ marginTop:9, width:"100%", padding:"9px", borderRadius:8, border:"1.5px solid "+C.blue, background:"#EFF6FF", color:C.blue, fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>
+          + Add to Estimate
+        </button>
+      )}
     </div>
   );
 }
@@ -1181,6 +1187,365 @@ function MasterView({ brands, items, onItemsChange, settings }) {
 }
 
 // ── PRICE LIST VIEW ───────────────────────────────────────────────
+// ── ESTIMATE VIEW ─────────────────────────────────────────────────
+const PRICE_TYPES = [
+  { id:"rl",  label:"RL",  col:C.rl,  bg:C.rlBg  },
+  { id:"dm",  label:"DM",  col:C.dm,  bg:C.dmBg  },
+  { id:"pl",  label:"PL",  col:C.pl,  bg:C.plBg  },
+  { id:"sdm", label:"SDM", col:C.sdm, bg:C.sdmBg },
+];
+
+function EstimateView({ brands, items, settings, estimates, onEstimatesSave }) {
+  const salesmen = settings.salesmen || [];
+  const prefix   = settings.estimatePrefix || "VKF";
+
+  // ── state ──
+  const [salesmanName, setSalesmanName] = useState("");
+  const [custName,     setCustName]     = useState("");
+  const [custPhone,    setCustPhone]    = useState("");
+  const [search,       setSearch]       = useState("");
+  const [cartLines,    setCartLines]    = useState([]);   // { id, itemId, name, priceType, unitPrice, qty, itemDiscount, includeGST, gstPct }
+  const [billGST,      setBillGST]      = useState(false);
+  const [otherLabel,   setOtherLabel]   = useState("");
+  const [otherAmt,     setOtherAmt]     = useState("");
+  const [adjustment,   setAdjustment]   = useState("");
+  const [narration,    setNarration]    = useState("");
+  const [pricePopup,   setPricePopup]   = useState(null); // enriched item
+  const [saved,        setSaved]        = useState(null); // saved estimate for print view
+  const [showHistory,  setShowHistory]  = useState(false);
+
+  const enriched = useMemo(() => {
+    return items.filter(i => i.active).map(i => {
+      const b = brands.find(x => x.id===i.bId)||null;
+      return Object.assign({}, i, computeItem(i,b,settings), {_b:b});
+    });
+  }, [items, brands, settings]);
+
+  const searchResults = search.trim().length > 0
+    ? enriched.filter(i => i.name.toLowerCase().includes(search.toLowerCase()) || (i._b && i._b.name.toLowerCase().includes(search.toLowerCase())))
+    : [];
+
+  function addToCart(it, priceType) {
+    const prices = { rl: it.rl, dm: it.dm, pl: it.pl, sdm: it.sdmInc||it.sdm };
+    const up = prices[priceType];
+    if (!up) return toast("No price set for " + priceType.toUpperCase() + " on this item","warn");
+    setCartLines(p => {
+      const ex = p.find(l => l.itemId===it.id && l.priceType===priceType);
+      if (ex) return p.map(l => l.itemId===it.id&&l.priceType===priceType ? {...l, qty:l.qty+1} : l);
+      return [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05 }];
+    });
+    setPricePopup(null);
+    setSearch("");
+    toast(it.name + " added","ok");
+  }
+
+  function lineTotal(l) {
+    const base = l.unitPrice * l.qty;
+    const disc = parseFloat(l.itemDiscount)||0;
+    const afterDisc = base * (1 - disc/100);
+    const gst = l.includeGST ? afterDisc * l.gstPct : 0;
+    return +(afterDisc + gst).toFixed(2);
+  }
+
+  const subtotal    = cartLines.reduce((s,l) => s + lineTotal(l), 0);
+  const billGSTAmt  = billGST ? +(subtotal * 0.05).toFixed(2) : 0;
+  const otherAmtN   = parseFloat(otherAmt)||0;
+  const adjN        = parseFloat(adjustment)||0;
+  const grandTotal  = +(subtotal + billGSTAmt + otherAmtN + adjN).toFixed(2);
+
+  function nextEstNo() {
+    const used = (estimates||[]).map(e => parseInt(e.number.replace(/[^0-9]/g,""))||0);
+    const max  = used.length ? Math.max(...used) : (settings.estimateCounter||1) - 1;
+    return prefix + "-" + String(max + 1).padStart(3,"0");
+  }
+
+  function saveEstimate() {
+    if (!salesmanName) return toast("Select salesman first","err");
+    if (!cartLines.length) return toast("Add at least one item","err");
+    const est = {
+      id: uid(),
+      number: nextEstNo(),
+      salesmanName, custName, custPhone,
+      lines: cartLines,
+      billGST, billGSTAmt,
+      otherLabel, otherAmt: otherAmtN,
+      adjustment: adjN,
+      narration,
+      subtotal, grandTotal,
+      createdAt: new Date().toISOString(),
+    };
+    const next = [...(estimates||[]), est];
+    onEstimatesSave(next);
+    setSaved(est);
+    toast("Estimate " + est.number + " saved!");
+  }
+
+  function clearAll() {
+    setCartLines([]); setCustName(""); setCustPhone(""); setBillGST(false);
+    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null);
+  }
+
+  const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
+
+  // ── Print view ──
+  if (saved) {
+    return (
+      <div style={{ padding:"16px 16px 80px" }}>
+        <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:12, padding:"14px", marginBottom:14 }}>
+          <div style={{ fontSize:16, fontWeight:800, color:C.profit, marginBottom:4 }}>✅ {saved.number} saved!</div>
+          <div style={{ fontSize:12, color:C.profit }}>By {saved.salesmanName}{saved.custName?" · "+saved.custName:""}</div>
+        </div>
+        <div style={SS} id="print-est">
+          <div style={{ textAlign:"center", marginBottom:12 }}>
+            <div style={{ fontSize:18, fontWeight:900, color:C.navy }}>{settings.co}</div>
+            <div style={{ fontSize:11, color:C.sec }}>{settings.tag}</div>
+            <div style={{ fontSize:13, fontWeight:700, marginTop:6 }}>ESTIMATE</div>
+            <div style={{ fontSize:12, color:C.sec }}>No: {saved.number} · {fmtDate(saved.createdAt)}</div>
+          </div>
+          {(saved.custName||saved.custPhone) && (
+            <div style={{ background:"#F8FAFF", borderRadius:8, padding:"8px 12px", marginBottom:10, fontSize:12 }}>
+              <strong>Customer:</strong> {saved.custName||""} {saved.custPhone?"· "+saved.custPhone:""}
+            </div>
+          )}
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, marginBottom:10 }}>
+            <thead>
+              <tr style={{ background:"#F3F4F6" }}>
+                <th style={{ padding:"6px 8px", textAlign:"left", fontWeight:700 }}>Item</th>
+                <th style={{ padding:"6px 4px", textAlign:"center", fontWeight:700 }}>Qty</th>
+                <th style={{ padding:"6px 4px", textAlign:"right", fontWeight:700 }}>Price</th>
+                <th style={{ padding:"6px 4px", textAlign:"right", fontWeight:700 }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {saved.lines.map((l,i) => (
+                <tr key={l.id} style={{ borderBottom:"1px solid "+C.border }}>
+                  <td style={{ padding:"7px 8px" }}>
+                    <div style={{ fontWeight:600 }}>{l.name}</div>
+                    <div style={{ fontSize:10, color:C.mute }}>{l.priceType.toUpperCase()}{l.itemDiscount?` · ${l.itemDiscount}% off`:""}{l.includeGST?" · +GST":""}</div>
+                  </td>
+                  <td style={{ padding:"7px 4px", textAlign:"center" }}>{l.qty}</td>
+                  <td style={{ padding:"7px 4px", textAlign:"right" }}>{fp(l.unitPrice)}</td>
+                  <td style={{ padding:"7px 4px", textAlign:"right", fontWeight:700 }}>{fp(lineTotal(l))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ borderTop:"2px solid "+C.border, paddingTop:8 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:4 }}><span>Subtotal</span><span style={{ fontWeight:700 }}>{fp(saved.subtotal)}</span></div>
+            {saved.billGST && <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.amb, marginBottom:4 }}><span>GST (5%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
+            {saved.otherAmt ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.sec, marginBottom:4 }}><span>{saved.otherLabel||"Other charges"}</span><span>{fp(saved.otherAmt)}</span></div> : null}
+            {saved.adjustment ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:saved.adjustment<0?C.red:C.profit, marginBottom:4 }}><span>Adjustment</span><span>{saved.adjustment>0?"+":""}{fp(saved.adjustment)}</span></div> : null}
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:16, fontWeight:900, color:C.navy, borderTop:"1px solid "+C.border, paddingTop:8, marginTop:4 }}><span>Grand Total</span><span>{fp(saved.grandTotal)}</span></div>
+          </div>
+          {saved.narration && <div style={{ marginTop:10, fontSize:11, color:C.sec, fontStyle:"italic", borderTop:"1px solid "+C.border, paddingTop:8 }}>Note: {saved.narration}</div>}
+          <div style={{ marginTop:10, fontSize:10, color:C.mute, textAlign:"center" }}>Salesman: {saved.salesmanName} · {settings.co}</div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:4 }}>
+          <BtnP onClick={() => window.print()}>🖨 Print</BtnP>
+          <BtnO color={C.blue} onClick={clearAll}>+ New Estimate</BtnO>
+        </div>
+        <div style={{ height:10 }} />
+        <BtnO onClick={() => setShowHistory(true)}>📋 View All Estimates</BtnO>
+        {showHistory && <EstimateHistory estimates={estimates} onClose={() => setShowHistory(false)} />}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:"16px 16px 80px" }}>
+      {pricePopup && (
+        <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:"#fff", borderRadius:20, padding:"22px 18px", maxWidth:340, width:"100%" }}>
+            <div style={{ fontSize:15, fontWeight:800, marginBottom:4 }}>{pricePopup.name}</div>
+            <div style={{ fontSize:11, color:C.sec, marginBottom:14 }}>Select price type to add to estimate</div>
+            {PRICE_TYPES.map(pt => {
+              const prices = { rl:pricePopup.rl, dm:pricePopup.dm, pl:pricePopup.pl, sdm:pricePopup.sdmInc||pricePopup.sdm };
+              const pv = prices[pt.id];
+              if (!pv) return null;
+              return (
+                <button key={pt.id} onClick={() => addToCart(pricePopup, pt.id)}
+                  style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%", padding:"13px 16px", borderRadius:10, border:"1.5px solid "+pt.col, background:pt.bg, cursor:"pointer", fontFamily:"inherit", marginBottom:8 }}>
+                  <span style={{ fontWeight:700, color:pt.col, fontSize:14 }}>{pt.label}</span>
+                  <span style={{ fontWeight:900, color:pt.col, fontSize:16 }}>{fp(pv)}</span>
+                </button>
+              );
+            })}
+            <BtnO onClick={() => setPricePopup(null)} style={{ marginTop:4 }}>Cancel</BtnO>
+          </div>
+        </div>
+      )}
+
+      {/* Header info */}
+      <div style={SS}>
+        <div style={{ fontSize:13, fontWeight:800, color:C.navy, marginBottom:12 }}>🧾 New Estimate</div>
+        <Fld label="Salesman *">
+          <select style={SEL} value={salesmanName} onChange={e => setSalesmanName(e.target.value)}>
+            <option value="">— Select Salesman —</option>
+            {salesmen.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </Fld>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+          <Fld label="Customer Name"><input style={INP} placeholder="Name (optional)" value={custName} onChange={e => setCustName(e.target.value)} /></Fld>
+          <Fld label="Phone"><input style={INP} placeholder="Phone (optional)" value={custPhone} onChange={e => setCustPhone(e.target.value)} /></Fld>
+        </div>
+      </div>
+
+      {/* Search + add items */}
+      <div style={SS}>
+        <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:8 }}>Add Items</div>
+        <input style={Object.assign({},INP,{marginBottom:0})} placeholder="🔍 Search item name or brand..." value={search} onChange={e => setSearch(e.target.value)} />
+        {searchResults.length > 0 && (
+          <div style={{ marginTop:6, maxHeight:220, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9 }}>
+            {searchResults.map(it => (
+              <button key={it.id} onClick={() => setPricePopup(it)}
+                style={{ display:"flex", justifyContent:"space-between", alignItems:"center", width:"100%", padding:"10px 12px", background:"#fff", border:"none", borderBottom:"1px solid "+C.border, cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{it.name}</div>
+                  <div style={{ fontSize:10, color:C.mute }}>{it.cat}{it._b?" · "+it._b.code:""}</div>
+                </div>
+                <span style={{ fontSize:11, color:C.blue, fontWeight:700 }}>+ Add</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Cart lines */}
+      {cartLines.length > 0 && (
+        <div style={SS}>
+          <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:10 }}>Cart ({cartLines.length} item{cartLines.length!==1?"s":""})</div>
+          {cartLines.map((l, idx) => {
+            const pt = PRICE_TYPES.find(p => p.id===l.priceType)||PRICE_TYPES[0];
+            return (
+              <div key={l.id} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"11px 12px", marginBottom:8 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                  <div style={{ flex:1, paddingRight:8 }}>
+                    <div style={{ fontSize:13, fontWeight:700 }}>{l.name}</div>
+                    <div style={{ display:"inline-block", background:pt.bg, color:pt.col, border:"1px solid "+pt.col, borderRadius:20, padding:"1px 8px", fontSize:10, fontWeight:800, marginTop:3 }}>{pt.label} · {fp(l.unitPrice)}</div>
+                  </div>
+                  <button onClick={() => setCartLines(p => p.filter(x => x.id!==l.id))} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:13, color:C.red, fontFamily:"inherit" }}>✕</button>
+                </div>
+                {/* Qty + discount + GST */}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+                  <div>
+                    <div style={{ fontSize:10, color:C.sec, fontWeight:700, marginBottom:3 }}>QTY</div>
+                    <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+                      <button onClick={() => setCartLines(p => p.map(x => x.id===l.id?{...x,qty:Math.max(1,x.qty-1)}:x))} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid "+C.border, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:14 }}>−</button>
+                      <input type="number" min="1" value={l.qty} onChange={e => setCartLines(p => p.map(x => x.id===l.id?{...x,qty:Math.max(1,parseInt(e.target.value)||1)}:x))}
+                        style={{ width:40, textAlign:"center", padding:"5px 2px", borderRadius:6, border:"1.5px solid "+C.border, fontSize:13, fontWeight:700, fontFamily:"inherit" }} />
+                      <button onClick={() => setCartLines(p => p.map(x => x.id===l.id?{...x,qty:x.qty+1}:x))} style={{ width:28, height:28, borderRadius:6, border:"1.5px solid "+C.border, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:700, fontSize:14 }}>+</button>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:C.sec, fontWeight:700, marginBottom:3 }}>DISC %</div>
+                    <input type="number" min="0" max="100" placeholder="0" value={l.itemDiscount}
+                      onChange={e => setCartLines(p => p.map(x => x.id===l.id?{...x,itemDiscount:e.target.value}:x))}
+                      style={{ width:"100%", padding:"7px 8px", borderRadius:6, border:"1.5px solid "+C.border, fontSize:12, fontFamily:"inherit" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, color:C.sec, fontWeight:700, marginBottom:3 }}>+GST</div>
+                    <button onClick={() => setCartLines(p => p.map(x => x.id===l.id?{...x,includeGST:!x.includeGST}:x))}
+                      style={{ padding:"6px 10px", borderRadius:6, border:"1.5px solid "+(l.includeGST?C.amb:C.border), background:l.includeGST?C.ambBg:"#fff", color:l.includeGST?C.amb:C.sec, fontWeight:700, fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>
+                      {l.includeGST?"ON":"OFF"}
+                    </button>
+                  </div>
+                </div>
+                <div style={{ marginTop:6, textAlign:"right", fontSize:12, fontWeight:800, color:C.navy }}>Line total: {fp(lineTotal(l))}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Bill totals */}
+      {cartLines.length > 0 && (
+        <div style={SS}>
+          <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:12 }}>Bill Summary</div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:10 }}>
+            <span style={{ color:C.sec }}>Subtotal</span><span style={{ fontWeight:800 }}>{fp(subtotal)}</span>
+          </div>
+          {/* Bill-level GST */}
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:700 }}>Add GST (5%) on bill</div>
+              <div style={{ fontSize:10, color:C.mute }}>Optional — adds 5% on subtotal</div>
+            </div>
+            <button onClick={() => setBillGST(p=>!p)}
+              style={{ padding:"7px 16px", borderRadius:20, border:"1.5px solid "+(billGST?C.amb:C.border), background:billGST?C.ambBg:"#fff", color:billGST?C.amb:C.sec, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+              {billGST?"ON · "+fp(billGSTAmt):"OFF"}
+            </button>
+          </div>
+          {/* Other charges */}
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:8, marginBottom:10 }}>
+            <Fld label="Other Charges Label">
+              <input style={INP} placeholder="e.g. Packing, Transport" value={otherLabel} onChange={e => setOtherLabel(e.target.value)} />
+            </Fld>
+            <Fld label="Amount ₹">
+              <input style={INP} type="number" placeholder="0" value={otherAmt} onChange={e => setOtherAmt(e.target.value)} />
+            </Fld>
+          </div>
+          {/* Adjustment */}
+          <Fld label="Adjustment ₹ (use − for discount)" hint="e.g. −50 for discount, +20 for rounding">
+            <input style={INP} type="number" placeholder="e.g. -50 or +20" value={adjustment} onChange={e => setAdjustment(e.target.value)} />
+          </Fld>
+          {/* Narration */}
+          <Fld label="Narration / Note">
+            <input style={INP} placeholder="e.g. Cash payment, delivery pending..." value={narration} onChange={e => setNarration(e.target.value)} />
+          </Fld>
+          {/* Grand total */}
+          <div style={{ display:"flex", justifyContent:"space-between", background:C.navy, borderRadius:10, padding:"13px 16px", marginTop:4 }}>
+            <span style={{ color:"#fff", fontSize:15, fontWeight:700 }}>Grand Total</span>
+            <span style={{ color:"#fff", fontSize:20, fontWeight:900 }}>{fp(grandTotal)}</span>
+          </div>
+        </div>
+      )}
+
+      {cartLines.length > 0 && (
+        <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10 }}>
+          <BtnP color={C.profit} onClick={saveEstimate}>💾 Save Estimate</BtnP>
+          <BtnO color={C.red} onClick={clearAll}>Clear</BtnO>
+        </div>
+      )}
+      <div style={{ height:12 }} />
+      <BtnO onClick={() => setShowHistory(true)}>📋 View All Estimates</BtnO>
+      {showHistory && <EstimateHistory estimates={estimates} onClose={() => setShowHistory(false)} />}
+    </div>
+  );
+}
+
+// ── ESTIMATE HISTORY MODAL ────────────────────────────────────────
+function EstimateHistory({ estimates, onClose }) {
+  const list = (estimates||[]).slice().reverse();
+  const today = new Date().toDateString();
+  const todayList = list.filter(e => new Date(e.createdAt).toDateString()===today);
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div style={{ background:"#fff", borderRadius:20, padding:"20px 16px", maxWidth:420, width:"100%", maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+          <div style={{ fontSize:16, fontWeight:800 }}>📋 All Estimates</div>
+          <button onClick={onClose} style={{ width:32, height:32, borderRadius:8, border:"1.5px solid "+C.border, background:"#F9FAFB", cursor:"pointer", fontSize:15, color:C.sec, fontFamily:"inherit" }}>✕</button>
+        </div>
+        {todayList.length>0 && <div style={{ fontSize:12, color:C.profit, fontWeight:700, marginBottom:8 }}>Today: {todayList.length} estimate{todayList.length!==1?"s":""} · {fp(todayList.reduce((s,e)=>s+e.grandTotal,0))}</div>}
+        <div style={{ flex:1, overflowY:"auto" }}>
+          {list.length===0 && <div style={{ textAlign:"center", padding:36, color:C.mute }}>No estimates yet.</div>}
+          {list.map(e => (
+            <div key={e.id} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"12px", marginBottom:8 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                <div>
+                  <div style={{ fontWeight:800, fontSize:14, color:C.navy }}>{e.number}</div>
+                  <div style={{ fontSize:11, color:C.sec, marginTop:2 }}>{e.salesmanName}{e.custName?" · "+e.custName:""}{e.custPhone?" · "+e.custPhone:""}</div>
+                  <div style={{ fontSize:10, color:C.mute, marginTop:2 }}>{fmtDateTime(e.createdAt)} · {e.lines.length} item{e.lines.length!==1?"s":""}</div>
+                </div>
+                <div style={{ fontSize:16, fontWeight:900, color:C.navy }}>{fp(e.grandTotal)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const PRICE_FILTERS = [
   { id:"all",        label:"All Prices",   col:C.text,    bg:"#F3F4F6", br:C.border },
   { id:"rl",         label:"🟢 RL",        col:C.rl,      bg:C.rlBg,   br:C.rlBr },
@@ -1190,7 +1555,7 @@ const PRICE_FILTERS = [
   { id:"highlights", label:"⭐ Highlights", col:"#B45309", bg:"#FEF3C7", br:"#FCD34D" },
 ];
 
-function PriceListView({ brands, items, settings, isAdmin }) {
+function PriceListView({ brands, items, settings, isAdmin, onAddToEstimate }) {
   const [viewMode, setViewMode] = useState("date");
   const [fCat,     setFCat]     = useState("All");
   const [fBrand,   setFBrand]   = useState("All");
@@ -1333,7 +1698,7 @@ function PriceListView({ brands, items, settings, isAdmin }) {
             <div key={cat}>
               <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:7, marginTop:4, textTransform:"uppercase", letterSpacing:"0.4px", borderLeft:"3px solid "+C.blue, paddingLeft:9 }}>{cat}</div>
               {grouped[cat].map(it => (
-                <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate={false} priceFilter={activeFilter} sdmUnlocked={isAdmin||sdmUnlocked} onSDMClick={handleSDMClick} />
+                <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate={false} priceFilter={activeFilter} sdmUnlocked={isAdmin||sdmUnlocked} onSDMClick={handleSDMClick} onAddToEstimate={!isAdmin?onAddToEstimate:undefined} />
               ))}
             </div>
           ))}
@@ -1354,7 +1719,7 @@ function PriceListView({ brands, items, settings, isAdmin }) {
                   <div style={{ flex:1, height:1, background:"#BFDBFE" }} />
                 </div>
                 {pinned.map(it => (
-                  <ItemCard key={it.id} it={it} isAdmin={false} showDate={false} priceFilter="all" sdmUnlocked={sdmUnlocked} onSDMClick={handleSDMClick} />
+                  <ItemCard key={it.id} it={it} isAdmin={false} showDate={false} priceFilter="all" sdmUnlocked={sdmUnlocked} onSDMClick={handleSDMClick} onAddToEstimate={onAddToEstimate} />
                 ))}
               </div>
             );
@@ -1368,7 +1733,7 @@ function PriceListView({ brands, items, settings, isAdmin }) {
                 <div style={{ flex:1, height:1, background:C.border }} />
               </div>
               {byDate[day].map(it => (
-                <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate priceFilter={activeFilter} sdmUnlocked={isAdmin||sdmUnlocked} onSDMClick={handleSDMClick} />
+                <ItemCard key={it.id} it={it} isAdmin={isAdmin} showDate priceFilter={activeFilter} sdmUnlocked={isAdmin||sdmUnlocked} onSDMClick={handleSDMClick} onAddToEstimate={!isAdmin?onAddToEstimate:undefined} />
               ))}
             </div>
           ))}
@@ -1379,8 +1744,10 @@ function PriceListView({ brands, items, settings, isAdmin }) {
 }
 
 // ── DASHBOARD VIEW ────────────────────────────────────────────────
-function DashboardView({ brands, items, settings }) {
+function DashboardView({ brands, items, settings, onSettingsChange, estimates }) {
   const [fBrand, setFBrand] = useState("All");
+  const [newSm,  setNewSm]  = useState("");
+  const [showEst, setShowEst] = useState(false);
   const PTYPES = [
     { id:"rl",  label:"RL",  col:C.rl,  bg:C.rlBg,  br:C.rlBr },
     { id:"dm",  label:"DM",  col:C.dm,  bg:C.dmBg,  br:C.dmBr },
@@ -1425,7 +1792,60 @@ function DashboardView({ brands, items, settings }) {
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
-      {/* Filter */}
+      {showEst && <EstimateHistory estimates={estimates} onClose={() => setShowEst(false)} />}
+
+      {/* Today's estimates summary */}
+      {(() => {
+        const todayEst = (estimates||[]).filter(e => new Date(e.createdAt).toDateString()===new Date().toDateString());
+        const todayTotal = todayEst.reduce((s,e)=>s+e.grandTotal,0);
+        return (
+          <div style={{ background:C.dmBg, border:"1px solid "+C.dmBr, borderRadius:12, padding:"14px", marginBottom:14 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:todayEst.length>0?10:0 }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:800, color:C.dm }}>📋 Today's Estimates</div>
+                <div style={{ fontSize:11, color:C.dm, marginTop:2 }}>{todayEst.length} estimate{todayEst.length!==1?"s":""} · {fp(todayTotal)}</div>
+              </div>
+              <button onClick={() => setShowEst(true)} style={{ padding:"7px 14px", borderRadius:8, border:"1.5px solid "+C.dm, background:"#fff", color:C.dm, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>View All</button>
+            </div>
+            {todayEst.length > 0 && (
+              <div>
+                {todayEst.slice(-3).reverse().map(e => (
+                  <div key={e.id} style={{ display:"flex", justifyContent:"space-between", fontSize:12, padding:"5px 0", borderBottom:"1px solid "+C.dmBr }}>
+                    <span style={{ fontWeight:700, color:C.dm }}>{e.number}</span>
+                    <span style={{ color:C.sec }}>{e.salesmanName}{e.custName?" · "+e.custName:""}</span>
+                    <span style={{ fontWeight:800, color:C.navy }}>{fp(e.grandTotal)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Salesman management */}
+      <div style={{ background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:14 }}>
+        <div style={{ fontSize:13, fontWeight:800, marginBottom:10 }}>👥 Salesmen</div>
+        {(settings.salesmen||[]).map((s,i) => (
+          <div key={s} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 10px", background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:8, marginBottom:6 }}>
+            <span style={{ fontSize:13, fontWeight:600 }}>{s}</span>
+            <button onClick={() => { const next = (settings.salesmen||[]).filter(x=>x!==s); if(next.length===0)return toast("Keep at least one salesman","warn"); onSettingsChange({...settings,salesmen:next}); toast("Removed","warn"); }}
+              style={{ width:28, height:28, borderRadius:6, border:"1.5px solid #FCA5A5", background:C.redBg, cursor:"pointer", fontSize:13, color:C.red, fontFamily:"inherit" }}>✕</button>
+          </div>
+        ))}
+        <div style={{ display:"flex", gap:8, marginTop:8 }}>
+          <input style={Object.assign({},INP,{flex:1})} placeholder="Add salesman name..." value={newSm} onChange={e => setNewSm(e.target.value)} />
+          <button onClick={() => {
+            const v = newSm.trim();
+            if(!v) return;
+            const cur = settings.salesmen||[];
+            if(cur.map(s=>s.toLowerCase()).includes(v.toLowerCase())) return toast("Already exists","warn");
+            onSettingsChange({...settings, salesmen:[...cur,v]});
+            setNewSm(""); toast("Salesman added");
+          }} style={{ padding:"11px 16px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>+ Add</button>
+        </div>
+      </div>
+
+      {/* Brand margin filter */}
       <div style={{ marginBottom:14 }}>
         <select style={Object.assign({},SEL,{marginBottom:0})} value={fBrand} onChange={e => setFBrand(e.target.value)}>
           <option value="All">All Brands</option>
@@ -1626,7 +2046,7 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
 }
 
 // ── ADMIN APP ─────────────────────────────────────────────────────
-function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, onItemsChange, onLogout, syncStatus }) {
+function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, onItemsChange, onLogout, syncStatus, estimates, onEstimatesSave }) {
   const [tab, setTab] = useState("master");
   const NAV = [{ id:"master",icon:"📋",label:"Master" },{ id:"dashboard",icon:"📊",label:"Dashboard" },{ id:"brands",icon:"🏷",label:"Brands" },{ id:"settings",icon:"⚙️",label:"Settings" }];
   return (
@@ -1639,7 +2059,7 @@ function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, o
         <button onClick={onLogout} style={{ padding:"7px 13px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.22)", background:"rgba(255,255,255,0.08)", color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Logout</button>
       </div>
       {tab === "master"    && <MasterView    brands={brands} items={items} onItemsChange={onItemsChange} settings={settings} />}
-      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} />}
+      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} onSettingsChange={onSettingsChange} estimates={estimates} />}
       {tab === "brands"    && <BrandsView    brands={brands} onBrandsChange={onBrandsChange} />}
       {tab === "settings"  && <SettingsView  settings={settings} onSettingsChange={onSettingsChange} syncStatus={syncStatus} />}
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
@@ -1654,7 +2074,15 @@ function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, o
 }
 
 // ── SALESMAN APP ──────────────────────────────────────────────────
-function SalesmanApp({ settings, brands, items, onLogout, syncStatus }) {
+function SalesmanApp({ settings, brands, items, onLogout, syncStatus, estimates, onEstimatesSave }) {
+  const [tab, setTab] = useState("prices");
+  const [addPopupItem, setAddPopupItem] = useState(null); // item to add from prices tab
+
+  const NAV = [
+    { id:"prices",   icon:"🏷", label:"Prices" },
+    { id:"estimate", icon:"🧾", label:"Estimate" },
+  ];
+
   return (
     <div style={{ minHeight:"100vh", background:C.bg }}>
       <div style={{ background:C.navy, padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, boxShadow:"0 2px 10px rgba(0,0,0,0.2)" }}>
@@ -1664,7 +2092,44 @@ function SalesmanApp({ settings, brands, items, onLogout, syncStatus }) {
         </div>
         <button onClick={onLogout} style={{ padding:"7px 13px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.22)", background:"rgba(255,255,255,0.08)", color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Logout</button>
       </div>
-      <PriceListView brands={brands} items={items} settings={settings} isAdmin={false} />
+      {/* Price-to-estimate popup */}
+      {addPopupItem && (
+        <div style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:"#fff", borderRadius:20, padding:"22px 18px", maxWidth:340, width:"100%" }}>
+            <div style={{ fontSize:15, fontWeight:800, marginBottom:4 }}>{addPopupItem.name}</div>
+            <div style={{ fontSize:11, color:C.sec, marginBottom:14 }}>Select price to add to estimate</div>
+            {PRICE_TYPES.map(pt => {
+              const prices = { rl:addPopupItem.rl, dm:addPopupItem.dm, pl:addPopupItem.pl, sdm:addPopupItem.sdmInc||addPopupItem.sdm };
+              const pv = prices[pt.id];
+              if (!pv) return null;
+              return (
+                <button key={pt.id} onClick={() => {
+                  // pass to estimate tab via localStorage-like state — we navigate to estimate tab
+                  setTab("estimate");
+                  // We store the pending item in a ref so EstimateView can pick it up
+                  window._pendingEstimateItem = { item: addPopupItem, priceType: pt.id };
+                  setAddPopupItem(null);
+                  toast(addPopupItem.name + " → Estimate");
+                }}
+                  style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%", padding:"13px 16px", borderRadius:10, border:"1.5px solid "+pt.col, background:pt.bg, cursor:"pointer", fontFamily:"inherit", marginBottom:8 }}>
+                  <span style={{ fontWeight:700, color:pt.col, fontSize:14 }}>{pt.label}</span>
+                  <span style={{ fontWeight:900, color:pt.col, fontSize:16 }}>{fp(pv)}</span>
+                </button>
+              );
+            })}
+            <BtnO onClick={() => setAddPopupItem(null)} style={{ marginTop:4 }}>Cancel</BtnO>
+          </div>
+        </div>
+      )}
+      {tab === "prices"   && <PriceListView brands={brands} items={items} settings={settings} isAdmin={false} onAddToEstimate={it => setAddPopupItem(it)} />}
+      {tab === "estimate" && <EstimateView  brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={onEstimatesSave} />}
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
+        {NAV.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2, border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", borderTop:tab===t.id?"2.5px solid "+C.blue:"2.5px solid transparent" }}>
+            <span style={{ fontSize:19 }}>{t.icon}</span><span style={{ fontSize:10, fontWeight:700, color:tab===t.id?C.blue:C.mute }}>{t.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1674,15 +2139,17 @@ export default function App() {
   const [settings,   setSettings]   = useState(DEF_S);
   const [brands,     setBrands]     = useState(DEF_B);
   const [items,      setItems]      = useState(DEF_I);
+  const [estimates,  setEstimates]  = useState([]);
   const [role,       setRole]       = useState(null);
   const [ready,      setReady]      = useState(false);
   const [syncStatus, setSyncStatus] = useState("synced");
 
   useEffect(() => {
     fsLoad().then(d => {
-      if (d.settings) setSettings(s => Object.assign({}, DEF_S, d.settings)); // merge so new sdmPIN default applies
-      if (d.brands)   setBrands(d.brands);
-      if (d.items)    setItems(d.items);
+      if (d.settings)  setSettings(s => Object.assign({}, DEF_S, d.settings));
+      if (d.brands)    setBrands(d.brands);
+      if (d.items)     setItems(d.items);
+      if (d.estimates) setEstimates(d.estimates);
       setReady(true);
     }).catch(() => { setSyncStatus("offline"); setReady(true); });
   }, []);
@@ -1691,15 +2158,17 @@ export default function App() {
   useEffect(() => {
     if (!ready || listenersStarted.current) return;
     listenersStarted.current = true;
-    const unsubS = onSnapshot(FS.settings(), snap => { if (snap.exists()) setSettings(s => Object.assign({}, DEF_S, snap.data().v)); }, () => setSyncStatus("offline"));
-    const unsubB = onSnapshot(FS.brands(),   snap => { if (snap.exists()) setBrands(snap.data().v); }, () => setSyncStatus("offline"));
-    const unsubI = onSnapshot(FS.items(),    snap => { if (snap.exists()) setItems(snap.data().v);  }, () => setSyncStatus("offline"));
-    return () => { unsubS(); unsubB(); unsubI(); };
+    const unsubS = onSnapshot(FS.settings(),  snap => { if (snap.exists()) setSettings(s => Object.assign({}, DEF_S, snap.data().v)); }, () => setSyncStatus("offline"));
+    const unsubB = onSnapshot(FS.brands(),    snap => { if (snap.exists()) setBrands(snap.data().v);    }, () => setSyncStatus("offline"));
+    const unsubI = onSnapshot(FS.items(),     snap => { if (snap.exists()) setItems(snap.data().v);     }, () => setSyncStatus("offline"));
+    const unsubE = onSnapshot(FS.estimates(), snap => { if (snap.exists()) setEstimates(snap.data().v); }, () => {});
+    return () => { unsubS(); unsubB(); unsubI(); unsubE(); };
   }, [ready]);
 
-  async function saveSettings(next) { setSettings(next); setSyncStatus("saving"); try { await fsSave("settings",next); setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
-  async function saveBrands(next)   { setBrands(next);   setSyncStatus("saving"); try { await fsSave("brands",next);   setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
-  async function saveItems(next)    { setItems(next);     setSyncStatus("saving"); try { await fsSave("items",next);    setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
+  async function saveSettings(next)  { setSettings(next);  setSyncStatus("saving"); try { await fsSave("settings",next);  setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
+  async function saveBrands(next)    { setBrands(next);    setSyncStatus("saving"); try { await fsSave("brands",next);    setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
+  async function saveItems(next)     { setItems(next);     setSyncStatus("saving"); try { await fsSave("items",next);     setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
+  async function saveEstimates(next) { setEstimates(next); try { await fsSave("estimates",next); } catch { toast("Estimate sync failed","err"); } }
 
   if (!ready) return (
     <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -1712,12 +2181,12 @@ export default function App() {
 
   return (
     <div>
-      <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}input::placeholder{color:#CBD5E1;}button:active{opacity:0.75;transform:scale(0.97);}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}`}</style>
+      <style>{`*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}input:focus,select:focus{outline:none!important;border-color:#1648D6!important;box-shadow:0 0 0 3px rgba(22,72,214,0.1)!important;}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}input::placeholder{color:#CBD5E1;}button:active{opacity:0.75;transform:scale(0.97);}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:4px;}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}@media print{.no-print{display:none!important;}}</style>
       <ToastHost />
       <div style={{ fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
         {!role               && <Login       settings={settings} onLogin={setRole} />}
-        {role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} />}
-        {role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} />}
+        {role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} />}
+        {role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} />}
       </div>
     </div>
   );
