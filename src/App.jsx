@@ -1221,8 +1221,9 @@ function buildWAText(est, co) {
 
 const PRINT_CSS = `
 @media print {
-  body > * { display: none !important; }
-  #vkf-print-area { display: block !important; position: static !important; }
+  body { margin: 0; }
+  #root > * { display: none !important; }
+  #vkf-print-area { display: block !important; visibility: visible !important; position: fixed; left:0; top:0; width:100%; background:#fff; z-index:99999; padding:20px; }
 }
 `;
 
@@ -1248,6 +1249,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [showHistory,  setShowHistory]  = useState(false);
   const [editingLine,  setEditingLine]  = useState(null);
   const [customPriceInput, setCustomPriceInput] = useState("");
+  const [sdmUnlockedEst, setSdmUnlockedEst] = useState(false);
+  const [sdmPinPopup,   setSdmPinPopup]   = useState(false);
+  const [roundOff,      setRoundOff]       = useState("");
 
   useEffect(() => {
     if (!document.getElementById("vkf-print-css")) {
@@ -1321,7 +1325,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const billGSTAmt  = billGST?+(subtotal*billGSTPct).toFixed(2):0;
   const otherAmtN   = parseFloat(otherAmt)||0;
   const adjN        = parseFloat(adjustment)||0;
-  const grandTotal  = +(subtotal+billGSTAmt+otherAmtN+adjN).toFixed(2);
+  const roundOffN   = parseFloat(roundOff)||0;
+  const grandTotal  = +(subtotal+billGSTAmt+otherAmtN+adjN+roundOffN).toFixed(2);
   const totalProfit = cartLines.reduce((s,l)=>{ const p=lineProfit(l); return s+(p||0); },0);
 
   function nextEstNo() {
@@ -1336,11 +1341,14 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     const est = {
       id:uid(), number:nextEstNo(),
       salesmanName, custName, custPhone,
-      lines: cartLines.map(l=>({...l,_it:undefined})),
+      lines: cartLines.map(l=>{
+          const {_it, ...rest} = l;
+          return rest;
+        }),
       billGST, billGSTPct, billGSTAmt,
       otherLabel, otherAmt:otherAmtN,
       adjustment:adjN, narration,
-      subtotal, grandTotal, totalProfit,
+      subtotal, grandTotal, totalProfit, roundOff:roundOffN,
       createdAt:new Date().toISOString(),
       status:"active",
     };
@@ -1351,12 +1359,36 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
   function clearAll() {
     setCartLines([]); setCustName(""); setCustPhone(""); setBillGST(false);
-    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT("");
+    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff("");
+  }
+
+  function loadEstimate(est) {
+    setSalesmanName(est.salesmanName||"");
+    setCustName(est.custName||"");
+    setCustPhone(est.custPhone||"");
+    setNarration(est.narration||"");
+    setOtherLabel(est.otherLabel||"");
+    setOtherAmt(est.otherAmt?String(est.otherAmt):"");
+    setAdjustment(est.adjustment?String(est.adjustment):"");
+    setBillGST(!!est.billGST);
+    setBillGSTPct(est.billGSTPct||0.05);
+    setDefaultPT("");
+    setSaved(null);
+    // Restore cart lines with _it lookup
+    const restored = (est.lines||[]).map(l => {
+      const it = enriched.find(x=>x.id===l.itemId)||null;
+      return {...l, _it:it, customPrice:l.customPrice||"", originalPrice:l.originalPrice||l.unitPrice};
+    });
+    setCartLines(restored);
+    toast("Estimate loaded for editing");
   }
 
   function doPrint() {
     const el = document.getElementById("vkf-print-area");
-    if (el) { el.style.display="block"; window.print(); setTimeout(()=>{ el.style.display="none"; },1500); }
+    if (!el) return;
+    el.style.display = "block";
+    window.onafterprint = () => { el.style.display = "none"; window.onafterprint = null; };
+    window.print();
   }
 
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
@@ -1407,6 +1439,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
             {saved.billGST&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>GST ({((saved.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
             {saved.otherAmt>0&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>{saved.otherLabel||"Other"}</span><span>{fp(saved.otherAmt)}</span></div>}
             {saved.adjustment?<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Adjustment</span><span>{saved.adjustment>0?"+":""}{fp(saved.adjustment)}</span></div>:null}
+              {saved.roundOff?<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Round Off</span><span>{saved.roundOff>0?"+":""}{fp(saved.roundOff)}</span></div>:null}
             <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", fontWeight:900, fontSize:16, borderTop:"2px solid #000" }}><span>GRAND TOTAL</span><span>{fp(saved.grandTotal)}</span></div>
           </div>
           {saved.narration&&<div style={{ marginTop:12, fontSize:11, borderTop:"1px dashed #ccc", paddingTop:8 }}><b>Note:</b> {saved.narration}</div>}
@@ -1429,13 +1462,27 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         <BtnO color={C.blue} onClick={clearAll}>+ New Estimate</BtnO>
         <div style={{ height:10 }} />
         <BtnO onClick={()=>setShowHistory(true)}>📋 View All Estimates</BtnO>
-        {showHistory&&<EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={isAdmin} onClose={()=>setShowHistory(false)} settings={settings} />}
+        {showHistory&&<EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={isAdmin} onClose={()=>setShowHistory(false)} settings={settings} onLoadEstimate={loadEstimate} />}
       </div>
     );
   }
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
+      {sdmPinPopup&&(
+        <div style={{ position:"fixed", inset:0, zIndex:800, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:"#fff", borderRadius:22, padding:"28px 24px", width:"100%", maxWidth:320, boxShadow:"0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ textAlign:"center", marginBottom:16 }}>
+              <div style={{ fontSize:28, marginBottom:8 }}>🟠</div>
+              <div style={{ fontSize:16, fontWeight:800, color:C.text }}>SDM Prices</div>
+              <div style={{ fontSize:12, color:C.sec, marginTop:4 }}>Enter SDM PIN to use SDM pricing in estimates</div>
+            </div>
+            <PINPad label="Enter SDM PIN" pin={settings.sdmPIN||"9999"} onSuccess={()=>{ setSdmUnlockedEst(true); setSdmPinPopup(false); toast("SDM unlocked for this estimate 🟠"); }} />
+            <div style={{ marginTop:16 }}><BtnO color={C.sec} onClick={()=>setSdmPinPopup(false)}>Cancel</BtnO></div>
+          </div>
+        </div>
+      )}
+
       {pricePopup&&(
         <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
           <div style={{ background:"#fff", borderRadius:20, padding:"22px 18px", maxWidth:340, width:"100%" }}>
@@ -1444,6 +1491,16 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
             {PRICE_TYPES.map(pt => {
               const prices={rl:pricePopup.rl,dm:pricePopup.dm,pl:pricePopup.pl,sdm:pricePopup.sdmInc||pricePopup.sdm};
               const pv=prices[pt.id]; if(!pv)return null;
+              // SDM requires PIN unlock
+              if(pt.id==="sdm"&&!sdmUnlockedEst){
+                return(
+                  <button key={pt.id} onClick={()=>setSdmPinPopup(true)}
+                    style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%", padding:"13px 16px", borderRadius:10, border:"1.5px dashed "+pt.col, background:"#F9FAFB", cursor:"pointer", fontFamily:"inherit", marginBottom:8 }}>
+                    <span style={{ fontWeight:700, color:pt.col, fontSize:14 }}>SDM 🔒 PIN required</span>
+                    <span style={{ fontSize:12, color:pt.col }}>Tap to unlock</span>
+                  </button>
+                );
+              }
               return (
                 <button key={pt.id} onClick={()=>addToCart(pricePopup,pt.id)}
                   style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%", padding:"13px 16px", borderRadius:10, border:"1.5px solid "+pt.col, background:pt.bg, cursor:"pointer", fontFamily:"inherit", marginBottom:8 }}>
@@ -1531,7 +1588,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                         if(!prices2[p2.id]||p2.id===l.priceType)return null;
                         return <button key={p2.id} onClick={()=>setCartLines(prev=>prev.map(x=>x.id===l.id?{...x,priceType:p2.id,unitPrice:prices2[p2.id],originalPrice:prices2[p2.id],customPrice:""}:x))} style={{ fontSize:9,padding:"1px 5px",borderRadius:4,border:"1px solid "+p2.col,background:p2.bg,color:p2.col,cursor:"pointer",fontFamily:"inherit",fontWeight:700 }}>{p2.label}</button>;
                       })}
-                      <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:11, background:"none", border:"none", cursor:"pointer", color:C.sec, padding:0 }}>✏️</button>
+                      <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:12, background:"#F0F9FF", border:"1.5px solid "+C.blue, cursor:"pointer", color:C.blue, padding:"2px 8px", borderRadius:6, fontWeight:700, fontFamily:"inherit" }}>✏️ Price</button>
                     </div>
                   </div>
                   <button onClick={()=>setCartLines(p=>p.filter(x=>x.id!==l.id))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid #FCA5A5",background:C.redBg,cursor:"pointer",fontSize:13,color:C.red,fontFamily:"inherit" }}>✕</button>
@@ -1592,6 +1649,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
             <Fld label="Amount ₹"><input style={INP} type="number" placeholder="0" value={otherAmt} onChange={e=>setOtherAmt(e.target.value)} /></Fld>
           </div>
           <Fld label="Adjustment ₹" hint="Use − for discount"><input style={INP} type="number" placeholder="e.g. -50" value={adjustment} onChange={e=>setAdjustment(e.target.value)} /></Fld>
+          <Fld label="Round Off ₹" hint="e.g. -2 or +3 to make round figure">
+            <input style={INP} type="number" step="0.01" placeholder="e.g. -2 or +3" value={roundOff} onChange={e=>setRoundOff(e.target.value)} />
+          </Fld>
           <Fld label="Narration / Note"><input style={INP} placeholder="e.g. Cash payment..." value={narration} onChange={e=>setNarration(e.target.value)} /></Fld>
           <div style={{ display:"flex", justifyContent:"space-between", background:C.navy, borderRadius:10, padding:"13px 16px", marginTop:4 }}>
             <span style={{ color:"#fff",fontSize:15,fontWeight:700 }}>Grand Total</span>
@@ -1604,13 +1664,13 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
       {cartLines.length>0&&(<div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10 }}><BtnP color={C.profit} onClick={saveEstimate}>💾 Save Estimate</BtnP><BtnO color={C.red} onClick={clearAll}>Clear</BtnO></div>)}
       <div style={{ height:12 }} />
       <BtnO onClick={()=>setShowHistory(true)}>📋 View All Estimates</BtnO>
-      {showHistory&&<EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={isAdmin} onClose={()=>setShowHistory(false)} settings={settings} />}
+      {showHistory&&<EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={isAdmin} onClose={()=>setShowHistory(false)} settings={settings} onLoadEstimate={loadEstimate} />}
     </div>
   );
 }
 
 // ── ESTIMATE HISTORY MODAL ────────────────────────────────────────
-function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, settings }) {
+function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, settings, onLoadEstimate }) {
   const now = Date.now();
   const H24 = 24*60*60*1000;
   const H48 = 48*60*60*1000;
@@ -1672,6 +1732,7 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
                 {!cancelled&&(
                   <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                     {settings&&<a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(e,settings.co)} target="_blank" rel="noopener noreferrer" style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #25D366",background:"#F0FFF4",color:"#15803D",fontWeight:700,fontSize:11,textDecoration:"none" }}>💬 WA</a>}
+                    {canEdit&&onLoadEstimate&&<button onClick={()=>{ onLoadEstimate(e); onClose(); }} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.blue,background:"#EFF6FF",color:C.blue,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>✏️ Edit</button>}
                     {isAdmin&&<button onClick={()=>cancelEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.amb,background:C.ambBg,color:C.amb,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Cancel</button>}
                     {isAdmin&&<button onClick={()=>deleteEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Delete</button>}
                   </div>
