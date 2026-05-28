@@ -1255,9 +1255,13 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [showHistory,  setShowHistory]  = useState(false);
   const [editingLine,  setEditingLine]  = useState(null);
   const [customPriceInput, setCustomPriceInput] = useState("");
-  const [sdmUnlockedEst, setSdmUnlockedEst] = useState(false);
-  const [sdmPinPopup,   setSdmPinPopup]   = useState(false);
-  const [roundOff,      setRoundOff]       = useState("");
+  const [sdmUnlockedEst,  setSdmUnlockedEst]  = useState(false);
+  const [sdmPinPopup,    setSdmPinPopup]    = useState(false);
+  const [roundOff,       setRoundOff]        = useState("");
+  const [showCustomItem, setShowCustomItem] = useState(false);
+  const [customItemName, setCustomItemName] = useState("");
+  const [customItemPrice,setCustomItemPrice]= useState("");
+  const [customItemQty,  setCustomItemQty]  = useState("1");
 
   useEffect(() => {
     if (!document.getElementById("vkf-print-css")) {
@@ -1315,6 +1319,23 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     });
     setPricePopup(null); setSearch("");
     toast(it.name + " added");
+  }
+
+  function addCustomItem() {
+    const name = customItemName.trim();
+    const price = parseFloat(customItemPrice);
+    const qty   = Math.max(1, parseInt(customItemQty)||1);
+    if (!name)          return toast("Enter item name","err");
+    if (!price || price<=0) return toast("Enter a valid price","err");
+    setCartLines(p => [...p, {
+      id:uid(), itemId:"custom_"+uid(), name, priceType:"custom",
+      unitPrice:price, originalPrice:price, customPrice:"",
+      qty, itemDiscount:"", includeGST:false, gstPct:0.05,
+      _it:null, isCustom:true,
+    }]);
+    setCustomItemName(""); setCustomItemPrice(""); setCustomItemQty("1");
+    setShowCustomItem(false);
+    toast(name + " added");
   }
 
   function effPrice(l) { const cp=parseFloat(l.customPrice); return (!isNaN(cp)&&cp>0)?cp:l.unitPrice; }
@@ -1626,8 +1647,39 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         )}
       </div>
 
+      {/* Custom item modal */}
+      {showCustomItem && (
+        <div style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:"#fff", borderRadius:18, padding:"22px 18px", maxWidth:320, width:"100%" }}>
+            <div style={{ fontSize:15, fontWeight:800, marginBottom:4 }}>📝 Add Custom Item</div>
+            <div style={{ fontSize:11, color:C.sec, marginBottom:14 }}>This item is for this estimate only — not saved to price list.</div>
+            <Fld label="Item Name *">
+              <input style={INP} placeholder="e.g. Special Dohar Set" value={customItemName} onChange={e=>setCustomItemName(e.target.value)} autoFocus />
+            </Fld>
+            <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:8 }}>
+              <Fld label="Price ₹ *">
+                <input style={INP} type="number" step="1" min="0" placeholder="e.g. 450" value={customItemPrice} onChange={e=>setCustomItemPrice(e.target.value)} />
+              </Fld>
+              <Fld label="Qty">
+                <input style={INP} type="number" step="1" min="1" placeholder="1" value={customItemQty} onChange={e=>setCustomItemQty(e.target.value)} />
+              </Fld>
+            </div>
+            <div style={{ display:"flex", gap:8 }}>
+              <BtnO onClick={()=>{ setShowCustomItem(false); setCustomItemName(""); setCustomItemPrice(""); setCustomItemQty("1"); }}>Cancel</BtnO>
+              <BtnP onClick={addCustomItem}>Add to Cart</BtnP>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={SS}>
-        <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:8 }}>Add Items</div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={{ fontSize:12, fontWeight:800, color:C.navy }}>Add Items</div>
+          <button onClick={()=>setShowCustomItem(true)}
+            style={{ padding:"5px 11px", borderRadius:7, border:"1.5px solid "+C.pl, background:C.plBg, color:C.pl, fontWeight:700, fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>
+            + Custom Item
+          </button>
+        </div>
         <input style={Object.assign({},INP,{marginBottom:0})} placeholder="🔍 Search item name or brand..." value={search} onChange={e=>setSearch(e.target.value)} />
         {searchResults.length>0&&(
           <div style={{ marginTop:6, maxHeight:220, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9 }}>
@@ -1652,7 +1704,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         <div style={SS}>
           <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:10 }}>Cart ({cartLines.length} item{cartLines.length!==1?"s":""})</div>
           {cartLines.map(l=>{
-            const pt=PRICE_TYPES.find(p=>p.id===l.priceType)||PRICE_TYPES[0];
+            const pt = l.isCustom
+              ? { id:"custom", label:"Custom", col:"#7C3AED", bg:"#F5F3FF" }
+              : (PRICE_TYPES.find(p=>p.id===l.priceType)||PRICE_TYPES[0]);
             const ep=effPrice(l); const hasCustom=parseFloat(l.customPrice)>0;
             return (
               <div key={l.id} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"11px 12px", marginBottom:8 }}>
@@ -1661,12 +1715,12 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                     <div style={{ fontSize:13, fontWeight:700 }}>{l.name}</div>
                     <div style={{ display:"flex", gap:5, alignItems:"center", marginTop:3, flexWrap:"wrap" }}>
                       <div style={{ background:pt.bg, color:pt.col, border:"1px solid "+pt.col, borderRadius:20, padding:"1px 8px", fontSize:10, fontWeight:800 }}>{pt.label} · {fp(ep)}{hasCustom?" ✏️":""}</div>
-                      {PRICE_TYPES.map(p2=>{
+                      {!l.isCustom && PRICE_TYPES.map(p2=>{
                         const prices2={rl:l._it&&l._it.rl,dm:l._it&&l._it.dm,pl:l._it&&l._it.pl,sdm:l._it&&(l._it.sdmInc||l._it.sdm)};
                         if(!prices2[p2.id]||p2.id===l.priceType)return null;
                         return <button key={p2.id} onClick={()=>{ if(p2.id==="sdm"&&!sdmUnlockedEst){ setSdmPinPopup(true); return; } setCartLines(prev=>prev.map(x=>x.id===l.id?{...x,priceType:p2.id,unitPrice:prices2[p2.id],originalPrice:prices2[p2.id],customPrice:""}:x)); }} style={{ fontSize:9,padding:"1px 5px",borderRadius:4,border:"1px solid "+p2.col,background:p2.bg,color:p2.col,cursor:"pointer",fontFamily:"inherit",fontWeight:700 }}>{p2.id==="sdm"&&!sdmUnlockedEst?"SDM 🔒":p2.label}</button>;
                       })}
-                      <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:12, background:"#F0F9FF", border:"1.5px solid "+C.blue, cursor:"pointer", color:C.blue, padding:"2px 8px", borderRadius:6, fontWeight:700, fontFamily:"inherit" }}>✏️ Price</button>
+                      {!l.isCustom && <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:12, background:"#F0F9FF", border:"1.5px solid "+C.blue, cursor:"pointer", color:C.blue, padding:"2px 8px", borderRadius:6, fontWeight:700, fontFamily:"inherit" }}>✏️ Price</button>}
                     </div>
                   </div>
                   <button onClick={()=>setCartLines(p=>p.filter(x=>x.id!==l.id))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid #FCA5A5",background:C.redBg,cursor:"pointer",fontSize:13,color:C.red,fontFamily:"inherit" }}>✕</button>
