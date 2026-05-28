@@ -1233,7 +1233,7 @@ const PRINT_CSS = `
 `;
 
 // ── ESTIMATE VIEW ─────────────────────────────────────────────────
-function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isAdmin }) {
+function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isAdmin, initialEst, onEditDone }) {
   const salesmen = settings.salesmen || [];
   const prefix   = settings.estimatePrefix || "VKF";
 
@@ -1266,6 +1266,13 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
       document.head.appendChild(s);
     }
   }, []);
+
+  // Load initialEst (from admin edit) on first mount
+  useEffect(() => {
+    if (initialEst) {
+      loadEstimate(initialEst);
+    }
+  }, []); // eslint-disable-line
 
   useEffect(() => {
     if (window._pendingEstimateItem) {
@@ -1345,6 +1352,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
   function saveEstimate() {
     if (!salesmanName) return toast("Select salesman first","err");
+    if (!custPhone.trim()) return toast("Customer phone number is required","err");
     if (!cartLines.length) return toast("Add at least one item","err");
     const existing = editingEstId ? (estimates||[]).find(e=>e.id===editingEstId) : null;
     const est = {
@@ -1366,6 +1374,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     onEstimatesSave(next);
     setSaved(est);
     setEditingEstId(null);
+    if (onEditDone && existing) onEditDone();
     toast(existing?"Estimate "+est.number+" updated!":"Estimate "+est.number+" saved!");
   }
 
@@ -1405,27 +1414,32 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   }
 
   function doDownloadPDF() {
-    // Open a clean print window with just the estimate content
     const el = document.getElementById("vkf-print-area");
     if (!el) return;
-    const fname = saved ? saved.number : "Estimate";
-    const printWin = window.open("", "_blank", "width=800,height=900");
-    if (!printWin) { toast("Allow popups to download PDF","warn"); return; }
-    printWin.document.write(
-      "<html><head><title>" + fname + "</title>" +
-      "<style>" +
-      "body{font-family:Arial,sans-serif;font-size:11px;color:#000;margin:0;padding:16px;}" +
-      "table{width:100%;border-collapse:collapse;}" +
-      "th,td{padding:5px 7px;border:1px solid #ccc;}" +
-      "th{background:#f0f0f0;}" +
-      "@page{size:A4 portrait;margin:8mm;}" +
-      "@media print{body{padding:0;}}" +
-      "</style></head><body>" +
-      el.innerHTML +
-      "<script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};}<\/script>" +
+    const fname = (saved ? saved.number : "Estimate").replace(/[^a-zA-Z0-9-]/g,"_");
+    const html = [
+      "<!DOCTYPE html><html><head><meta charset='UTF-8'>",
+      "<title>" + fname + "</title>",
+      "<style>",
+      "body{font-family:Arial,sans-serif;font-size:11px;color:#000;margin:0;padding:16px;}",
+      "table{width:100%;border-collapse:collapse;margin-bottom:10px;}",
+      "th,td{padding:5px 7px;border:1px solid #ccc;font-size:11px;}",
+      "th{background:#f0f0f0;font-weight:700;}",
+      "div{box-sizing:border-box;}",
+      "@page{size:A4 portrait;margin:8mm;}",
+      "@media print{body{padding:0;margin:0;}}",
+      "</style></head><body>",
+      el.innerHTML,
       "</body></html>"
-    );
-    printWin.document.close();
+    ].join("");
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = fname + ".html";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast("Downloaded! Open the file and print → Save as PDF");
   }
 
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
@@ -1601,8 +1615,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
           </select>
         </Fld>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-          <Fld label="Customer Name"><input style={INP} placeholder="Name (optional)" value={custName} onChange={e=>setCustName(e.target.value)} /></Fld>
-          <Fld label="Phone"><input style={INP} placeholder="Phone (optional)" value={custPhone} onChange={e=>setCustPhone(e.target.value)} /></Fld>
+          <Fld label="Customer Name (optional)"><input style={INP} placeholder="Name (optional)" value={custName} onChange={e=>setCustName(e.target.value)} /></Fld>
+          <Fld label="Phone *" hint="Required"><input style={Object.assign({},INP,{borderColor:custPhone.trim()?"":""})} placeholder="Customer phone (required)" value={custPhone} onChange={e=>setCustPhone(e.target.value)} /></Fld>
         </div>
         {defaultPT&&(
           <div style={{ background:"#EFF6FF", border:"1px solid #BFDBFE", borderRadius:8, padding:"7px 11px", fontSize:12, color:C.blue, fontWeight:600 }}>
@@ -1742,7 +1756,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 }
 
 // ── ESTIMATE HISTORY MODAL ────────────────────────────────────────
-function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings, onLoadEstimate, cancelEst, deleteEst }) {
+function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings, onLoadEstimate, cancelEst, deleteEst, onCloseHistory }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div style={{ background:cancelled?"#FFF5F5":"#F9FAFB", border:"1px solid "+(cancelled?"#FCA5A5":C.border), borderRadius:10, padding:"12px", marginBottom:8, opacity:cancelled?0.75:1 }}>
@@ -1818,7 +1832,7 @@ function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings,
       {!cancelled && (
         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
           {settings && <a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(e,settings.co)} target="_blank" rel="noopener noreferrer" style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #25D366",background:"#F0FFF4",color:"#15803D",fontWeight:700,fontSize:11,textDecoration:"none" }}>💬 WA</a>}
-          {canEdit && onLoadEstimate && <button onClick={()=>{ onLoadEstimate(e); }} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.blue,background:"#EFF6FF",color:C.blue,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>✏️ Edit</button>}
+          {canEdit && onLoadEstimate && <button onClick={()=>{ onLoadEstimate(e); if(onCloseHistory) onCloseHistory(); }} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.blue,background:"#EFF6FF",color:C.blue,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>✏️ Edit</button>}
           {isAdmin && <button onClick={()=>cancelEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid "+C.amb,background:C.ambBg,color:C.amb,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Cancel</button>}
           {isAdmin && <button onClick={()=>deleteEst(e.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Delete</button>}
         </div>
@@ -1831,14 +1845,25 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
   const now = Date.now();
   const H24 = 24*60*60*1000;
   const H48 = 48*60*60*1000;
+  const [searchQ, setSearchQ] = useState("");
 
-  const list = (estimates||[]).slice().reverse().filter(e => {
+  const baseList = (estimates||[]).slice().reverse().filter(e => {
     if (isAdmin) return true;
     return now - new Date(e.createdAt).getTime() < H48;
   });
 
+  const list = searchQ.trim()
+    ? baseList.filter(e => {
+        const q = searchQ.toLowerCase();
+        return (e.number||"").toLowerCase().includes(q)
+          || (e.custName||"").toLowerCase().includes(q)
+          || (e.custPhone||"").toLowerCase().includes(q)
+          || (e.salesmanName||"").toLowerCase().includes(q);
+      })
+    : baseList;
+
   const today = new Date().toDateString();
-  const todayList = list.filter(e => new Date(e.createdAt).toDateString()===today);
+  const todayList = baseList.filter(e => new Date(e.createdAt).toDateString()===today);
 
   function cancelEst(id) {
     onEstimatesSave((estimates||[]).map(e=>e.id===id?{...e,status:"cancelled"}:e));
@@ -1856,6 +1881,7 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
           <div style={{ fontSize:16, fontWeight:800 }}>📋 {isAdmin?"All Estimates":"Your Estimates"}</div>
           <button onClick={onClose} style={{ width:32,height:32,borderRadius:8,border:"1.5px solid "+C.border,background:"#F9FAFB",cursor:"pointer",fontSize:15,color:C.sec,fontFamily:"inherit" }}>✕</button>
         </div>
+        <input style={Object.assign({},INP,{marginBottom:10})} placeholder="🔍 Search by number, customer, phone, salesman..." value={searchQ} onChange={e=>setSearchQ(e.target.value)} />
         {todayList.length>0&&(
           <div style={{ background:C.profBg,border:"1px solid #BBF7D0",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12 }}>
             <span style={{ fontWeight:700,color:C.profit }}>Today: {todayList.length} · {fp(todayList.filter(e=>e.status!=="cancelled").reduce((s,e)=>s+e.grandTotal,0))}</span>
@@ -1869,7 +1895,7 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
             const cancelled=e.status==="cancelled";
             const age=now-new Date(e.createdAt).getTime();
             const canEdit=isAdmin||age<H24;
-            return <EstimateCard key={e.id} e={e} cancelled={cancelled} age={age} canEdit={canEdit} isAdmin={isAdmin} H24={H24} H48={H48} settings={settings} onLoadEstimate={onLoadEstimate} cancelEst={cancelEst} deleteEst={deleteEst} />;
+            return <EstimateCard key={e.id} e={e} cancelled={cancelled} age={age} canEdit={canEdit} isAdmin={isAdmin} H24={H24} H48={H48} settings={settings} onLoadEstimate={onLoadEstimate} cancelEst={cancelEst} deleteEst={deleteEst} onCloseHistory={onClose} />;
           })}
         </div>
       </div>
@@ -2078,7 +2104,8 @@ function PriceListView({ brands, items, settings, isAdmin, onAddToEstimate }) {
 // ── DASHBOARD VIEW ────────────────────────────────────────────────
 function DashboardView({ brands, items, settings, onSettingsChange, estimates, onEstimatesSave }) {
   const [fBrand, setFBrand] = useState("All");
-  const [showEst, setShowEst] = useState(false);
+  const [showEst,    setShowEst]    = useState(false);
+  const [editingEst, setEditingEst] = useState(null);
   const PTYPES = [
     { id:"rl",  label:"RL",  col:C.rl,  bg:C.rlBg,  br:C.rlBr },
     { id:"dm",  label:"DM",  col:C.dm,  bg:C.dmBg,  br:C.dmBr },
@@ -2123,7 +2150,18 @@ function DashboardView({ brands, items, settings, onSettingsChange, estimates, o
 
   return (
     <div style={{ padding:"16px 16px 80px" }}>
-      {showEst && <EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={true} onClose={() => setShowEst(false)} settings={settings} />}
+      {showEst && <EstimateHistory estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={true} onClose={() => setShowEst(false)} settings={settings} onLoadEstimate={(est)=>{ setEditingEst(est); setShowEst(false); }} />}
+      {editingEst && (
+        <div style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:0 }}>
+          <div style={{ background:C.bg, width:"100%", height:"100%", maxWidth:480, overflowY:"auto", position:"relative" }}>
+            <div style={{ background:C.navy, padding:"12px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:10 }}>
+              <div style={{ color:"#fff", fontWeight:800, fontSize:14 }}>✏️ Edit {editingEst.number}</div>
+              <button onClick={()=>setEditingEst(null)} style={{ padding:"6px 12px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.3)", background:"rgba(255,255,255,0.1)", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600, fontSize:12 }}>✕ Close</button>
+            </div>
+            <EstimateView brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={(next)=>{ onEstimatesSave(next); }} isAdmin={true} initialEst={editingEst} onEditDone={()=>setEditingEst(null)} />
+          </div>
+        </div>
+      )}
 
       {/* Today's estimates summary */}
       {(() => {
