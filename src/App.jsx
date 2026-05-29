@@ -1429,39 +1429,19 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   function doPrint() {
     const el = document.getElementById("vkf-print-area");
     if (!el) return;
+    // Set document title so browser uses it as filename when saving as PDF
+    const prevTitle = document.title;
+    document.title = saved ? saved.number : "Estimate";
     el.style.display = "block";
-    window.onafterprint = () => { el.style.display = "none"; window.onafterprint = null; };
+    window.onafterprint = () => {
+      el.style.display = "none";
+      document.title = prevTitle;
+      window.onafterprint = null;
+    };
     window.print();
   }
 
-  function doDownloadPDF() {
-    const el = document.getElementById("vkf-print-area");
-    if (!el) return;
-    const fname = (saved ? saved.number : "Estimate").replace(/[^a-zA-Z0-9-]/g,"_");
-    const html = [
-      "<!DOCTYPE html><html><head><meta charset='UTF-8'>",
-      "<title>" + fname + "</title>",
-      "<style>",
-      "body{font-family:Arial,sans-serif;font-size:11px;color:#000;margin:0;padding:16px;}",
-      "table{width:100%;border-collapse:collapse;margin-bottom:10px;}",
-      "th,td{padding:5px 7px;border:1px solid #ccc;font-size:11px;}",
-      "th{background:#f0f0f0;font-weight:700;}",
-      "div{box-sizing:border-box;}",
-      "@page{size:A4 portrait;margin:8mm;}",
-      "@media print{body{padding:0;margin:0;}}",
-      "</style></head><body>",
-      el.innerHTML,
-      "</body></html>"
-    ].join("");
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = fname + ".html";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    toast("Downloaded! Open the file and print → Save as PDF");
-  }
+
 
   const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
 
@@ -1481,29 +1461,36 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
           </div>
           {(()=>{
             const hasDisc = saved.lines.some(l=>parseFloat(l.itemDiscount)>0);
+            const hasGST  = saved.lines.some(l=>l.includeGST);
             return (
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, marginBottom:12 }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11, marginBottom:12 }}>
                 <thead>
                   <tr style={{ background:"#f0f0f0" }}>
-                    <th style={{ padding:"6px 8px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
-                    <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
-                    <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
-                    {hasDisc && <th style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ccc" }}>Disc%</th>}
-                    <th style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ccc" }}>Amount</th>
+                    <th style={{ padding:"5px 7px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
+                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
+                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
+                    {hasDisc && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>Disc%</th>}
+                    {hasGST  && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>GST</th>}
+                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ccc" }}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {saved.lines.map((l,i) => {
-                    const ep=parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
-                    const disc=parseFloat(l.itemDiscount)||0;
-                    const amt=ep*l.qty*(1-disc/100);
+                    const ep   = parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
+                    const disc = parseFloat(l.itemDiscount)||0;
+                    const base = ep*l.qty*(1-disc/100);
+                    const gstAmt = l.includeGST ? +(base*(l.gstPct||0.05)).toFixed(2) : 0;
+                    const amt  = +(base+gstAmt).toFixed(2);
                     return (
                       <tr key={l.id} style={{ borderBottom:"1px solid #ddd" }}>
-                        <td style={{ padding:"6px 8px", border:"1px solid #ddd" }}>{l.name}{l.includeGST?" (+"+((l.gstPct||0.05)*100).toFixed(0)+"% GST)":""}</td>
-                        <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
-                        <td style={{ padding:"6px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
-                        {hasDisc && <td style={{ padding:"6px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>}
-                        <td style={{ padding:"6px 4px", textAlign:"right", fontWeight:700, border:"1px solid #ddd" }}>{fp(amt)}</td>
+                        <td style={{ padding:"5px 7px", border:"1px solid #ddd" }}>{l.name}</td>
+                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
+                        <td style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
+                        {hasDisc && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>}
+                        {hasGST  && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>
+                          {l.includeGST ? <span style={{ color:"#B45309" }}>+{((l.gstPct||0.05)*100).toFixed(0)}%<br/>{fp(gstAmt)}</span> : "-"}
+                        </td>}
+                        <td style={{ padding:"5px 4px", textAlign:"right", fontWeight:700, border:"1px solid #ddd" }}>{fp(amt)}</td>
                       </tr>
                     );
                   })}
@@ -1529,9 +1516,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
           <div style={{ fontSize:18, fontWeight:900, color:C.navy, marginTop:4 }}>{fp(saved.grandTotal)}</div>
         </div>
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
-          <BtnP onClick={doPrint}>🖨 Print</BtnP>
-          <BtnP color="#7C3AED" onClick={doDownloadPDF}>⬇ Save PDF</BtnP>
+        <div style={{ marginBottom:10 }}>
+          <BtnP onClick={doPrint}>🖨 Print / Save as PDF</BtnP>
+          <div style={{ fontSize:10, color:C.mute, textAlign:"center", marginTop:5 }}>In print dialog → choose "Save as PDF" → filename will be {saved?saved.number:"estimate"}</div>
         </div>
         <div style={{ display:"grid", gridTemplateColumns:saved.custPhone?"1fr 1fr":"1fr", gap:10, marginBottom:10 }}>
           {saved.custPhone && (
@@ -1702,7 +1689,10 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
       {cartLines.length>0&&(
         <div style={SS}>
-          <div style={{ fontSize:12, fontWeight:800, color:C.navy, marginBottom:10 }}>Cart ({cartLines.length} item{cartLines.length!==1?"s":""})</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+            <div style={{ fontSize:12, fontWeight:800, color:C.navy }}>Cart ({cartLines.length} item{cartLines.length!==1?"s":""})</div>
+            <div style={{ fontSize:11, color:C.sec, fontWeight:700 }}>Total Qty: {cartLines.reduce((s,l)=>s+l.qty,0)} pcs</div>
+          </div>
           {cartLines.map(l=>{
             const pt = l.isCustom
               ? { id:"custom", label:"Custom", col:"#7C3AED", bg:"#F5F3FF" }
@@ -1720,7 +1710,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                         if(!prices2[p2.id]||p2.id===l.priceType)return null;
                         return <button key={p2.id} onClick={()=>{ if(p2.id==="sdm"&&!sdmUnlockedEst){ setSdmPinPopup(true); return; } setCartLines(prev=>prev.map(x=>x.id===l.id?{...x,priceType:p2.id,unitPrice:prices2[p2.id],originalPrice:prices2[p2.id],customPrice:""}:x)); }} style={{ fontSize:9,padding:"1px 5px",borderRadius:4,border:"1px solid "+p2.col,background:p2.bg,color:p2.col,cursor:"pointer",fontFamily:"inherit",fontWeight:700 }}>{p2.id==="sdm"&&!sdmUnlockedEst?"SDM 🔒":p2.label}</button>;
                       })}
-                      {!l.isCustom && <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:12, background:"#F0F9FF", border:"1.5px solid "+C.blue, cursor:"pointer", color:C.blue, padding:"2px 8px", borderRadius:6, fontWeight:700, fontFamily:"inherit" }}>✏️ Price</button>}
+                      <button onClick={()=>{ setEditingLine(l.id); setCustomPriceInput(l.customPrice||""); }} style={{ fontSize:12, background:"#F0F9FF", border:"1.5px solid "+C.blue, cursor:"pointer", color:C.blue, padding:"2px 8px", borderRadius:6, fontWeight:700, fontFamily:"inherit" }}>✏️ Price</button>
                     </div>
                   </div>
                   <button onClick={()=>setCartLines(p=>p.filter(x=>x.id!==l.id))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid #FCA5A5",background:C.redBg,cursor:"pointer",fontSize:13,color:C.red,fontFamily:"inherit" }}>✕</button>
@@ -1767,6 +1757,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
       {cartLines.length>0&&(
         <div style={SS}>
           <div style={{ fontSize:12,fontWeight:800,color:C.navy,marginBottom:12 }}>Bill Summary</div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.sec, marginBottom:6 }}>
+            <span>Total Items</span><span style={{ fontWeight:700 }}>{cartLines.length} item{cartLines.length!==1?"s":""} · {cartLines.reduce((s,l)=>s+l.qty,0)} pcs</span>
+          </div>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:10 }}><span style={{ color:C.sec }}>Subtotal</span><span style={{ fontWeight:800 }}>{fp(subtotal)}</span></div>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
             <div><div style={{ fontSize:12,fontWeight:700 }}>Add GST on bill</div><div style={{ fontSize:10,color:C.mute }}>Optional</div></div>
@@ -1810,7 +1803,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 }
 
 // ── ESTIMATE HISTORY MODAL ────────────────────────────────────────
-function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings, onLoadEstimate, cancelEst, deleteEst, onCloseHistory }) {
+function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings, onLoadEstimate, cancelEst, deleteEst, uncancelEst, onCloseHistory }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div style={{ background:cancelled?"#FFF5F5":"#F9FAFB", border:"1px solid "+(cancelled?"#FCA5A5":C.border), borderRadius:10, padding:"12px", marginBottom:8, opacity:cancelled?0.75:1 }}>
@@ -1883,6 +1876,11 @@ function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings,
           {e.narration && <div style={{ fontSize:11, color:C.sec, fontStyle:"italic", marginTop:6 }}>Note: {e.narration}</div>}
         </div>
       )}
+      {cancelled && isAdmin && (
+        <div style={{ marginTop:6 }}>
+          <button onClick={()=>uncancelEst(e.id)} style={{ padding:"5px 12px",borderRadius:6,border:"1px solid "+C.profit,background:C.profBg,color:C.profit,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>↩ Restore Estimate</button>
+        </div>
+      )}
       {!cancelled && (
         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
           {settings && <a href={"https://wa.me/"+WA_NUMBER+"?text="+buildWAText(e,settings.co)} target="_blank" rel="noopener noreferrer" style={{ padding:"5px 10px",borderRadius:6,border:"1px solid #25D366",background:"#F0FFF4",color:"#15803D",fontWeight:700,fontSize:11,textDecoration:"none" }}>💬 WA</a>}
@@ -1923,6 +1921,10 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
     onEstimatesSave((estimates||[]).map(e=>e.id===id?{...e,status:"cancelled"}:e));
     toast("Cancelled","warn");
   }
+  function uncancelEst(id) {
+    onEstimatesSave((estimates||[]).map(e=>e.id===id?{...e,status:"active"}:e));
+    toast("Estimate restored");
+  }
   function deleteEst(id) {
     onEstimatesSave((estimates||[]).filter(e=>e.id!==id));
     toast("Deleted","warn");
@@ -1949,7 +1951,7 @@ function EstimateHistory({ estimates, onEstimatesSave, isAdmin, onClose, setting
             const cancelled=e.status==="cancelled";
             const age=now-new Date(e.createdAt).getTime();
             const canEdit=isAdmin||age<H24;
-            return <EstimateCard key={e.id} e={e} cancelled={cancelled} age={age} canEdit={canEdit} isAdmin={isAdmin} H24={H24} H48={H48} settings={settings} onLoadEstimate={onLoadEstimate} cancelEst={cancelEst} deleteEst={deleteEst} onCloseHistory={onClose} />;
+            return <EstimateCard key={e.id} e={e} cancelled={cancelled} age={age} canEdit={canEdit} isAdmin={isAdmin} H24={H24} H48={H48} settings={settings} onLoadEstimate={onLoadEstimate} cancelEst={cancelEst} deleteEst={deleteEst} uncancelEst={uncancelEst} onCloseHistory={onClose} />;
           })}
         </div>
       </div>
