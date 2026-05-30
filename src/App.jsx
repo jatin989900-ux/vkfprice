@@ -1315,7 +1315,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     setCartLines(p => {
       const ex = p.find(l => l.itemId===it.id && l.priceType===priceType);
       if (ex) return p.map(l => l.itemId===it.id&&l.priceType===priceType?{...l,qty:l.qty+1}:l);
-      return [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05, _it:it }];
+      return [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05, itemDesc:"", _it:it }];
     });
     setPricePopup(null); setSearch("");
     toast(it.name + " added");
@@ -1330,7 +1330,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     setCartLines(p => [...p, {
       id:uid(), itemId:"custom_"+uid(), name, priceType:"custom",
       unitPrice:price, originalPrice:price, customPrice:"",
-      qty, itemDiscount:"", includeGST:false, gstPct:0.05,
+      qty, itemDiscount:"", includeGST:false, gstPct:0.05, itemDesc:"",
       _it:null, isCustom:true,
     }]);
     setCustomItemName(""); setCustomItemPrice(""); setCustomItemQty("1");
@@ -1420,7 +1420,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     setEditingEstId(est.id);
     const restored = (est.lines||[]).map(l => {
       const it = enriched.find(x=>x.id===l.itemId)||null;
-      return {...l, _it:it, customPrice:l.customPrice||"", originalPrice:l.originalPrice||l.unitPrice};
+      return {...l, _it:it, customPrice:l.customPrice||"", originalPrice:l.originalPrice||l.unitPrice, itemDesc:l.itemDesc||""};
     });
     setCartLines(restored);
     toast("Editing "+est.number+" — save to update");
@@ -1483,7 +1483,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                     const amt  = +(base+gstAmt).toFixed(2);
                     return (
                       <tr key={l.id} style={{ borderBottom:"1px solid #ddd" }}>
-                        <td style={{ padding:"5px 7px", border:"1px solid #ddd" }}>{l.name}</td>
+                        <td style={{ padding:"5px 7px", border:"1px solid #ddd" }}>{l.name}{l.itemDesc?(<div style={{ fontSize:10, color:"#666", marginTop:2 }}>{l.itemDesc}</div>):null}</td>
                         <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
                         <td style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
                         {hasDisc && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>}
@@ -1703,6 +1703,12 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
                   <div style={{ flex:1, paddingRight:8 }}>
                     <div style={{ fontSize:13, fontWeight:700 }}>{l.name}</div>
+                    <input
+                      style={{ width:"100%", marginTop:4, padding:"4px 8px", borderRadius:6, border:"1px dashed "+C.border, fontSize:11, color:C.sec, fontFamily:"inherit", background:"#FAFBFD", outline:"none" }}
+                      placeholder="Add description (optional)"
+                      value={l.itemDesc||""}
+                      onChange={e=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,itemDesc:e.target.value}:x))}
+                    />
                     <div style={{ display:"flex", gap:5, alignItems:"center", marginTop:3, flexWrap:"wrap" }}>
                       <div style={{ background:pt.bg, color:pt.col, border:"1px solid "+pt.col, borderRadius:20, padding:"1px 8px", fontSize:10, fontWeight:800 }}>{pt.label} · {fp(ep)}{hasCustom?" ✏️":""}</div>
                       {!l.isCustom && PRICE_TYPES.map(p2=>{
@@ -1848,7 +1854,7 @@ function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings,
             return (
               <div key={l.id||i} style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"6px 0", borderBottom:"1px solid #F3F4F6" }}>
                 <div style={{ flex:1, paddingRight:8 }}>
-                  <div style={{ fontSize:12, fontWeight:600 }}>{l.name}</div>
+                  <div style={{ fontSize:12, fontWeight:600 }}>{l.name}</div>{l.itemDesc&&<div style={{ fontSize:10, color:C.sec, marginBottom:2 }}>{l.itemDesc}</div>}
                   <div style={{ fontSize:10, color:C.mute }}>
                     {l.qty} × {fp(ep)}
                     {disc>0?" − "+disc+"%":""}
