@@ -1258,10 +1258,12 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [sdmUnlockedEst,  setSdmUnlockedEst]  = useState(false);
   const [sdmPinPopup,    setSdmPinPopup]    = useState(false);
   const [roundOff,       setRoundOff]        = useState("");
-  const [showCustomItem, setShowCustomItem] = useState(false);
-  const [customItemName, setCustomItemName] = useState("");
-  const [customItemPrice,setCustomItemPrice]= useState("");
-  const [customItemQty,  setCustomItemQty]  = useState("1");
+  const [showCustomItem,  setShowCustomItem]  = useState(false);
+  const [customItemName,  setCustomItemName]  = useState("");
+  const [customItemPrice, setCustomItemPrice] = useState("");
+  const [customItemQty,   setCustomItemQty]   = useState("1");
+  const [showInlineAdd,   setShowInlineAdd]   = useState(false);
+  const [inlineSearch,    setInlineSearch]    = useState("");
 
   useEffect(() => {
     if (!document.getElementById("vkf-print-css")) {
@@ -1286,12 +1288,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
       const up = prices[priceType];
       if (up) {
         if (!defaultPT) setDefaultPT(priceType);
-        setCartLines(p => {
-          const ex = p.find(l => l.itemId===item.id && l.priceType===priceType);
-          if (ex) return p.map(l => l.itemId===item.id&&l.priceType===priceType?{...l,qty:l.qty+1}:l);
-          return [...p, { id:uid(), itemId:item.id, name:item.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:item.gst||0.05, _it:item }];
-        });
-        toast(item.name + " added to estimate");
+        if (!defaultPT) setDefaultPT(priceType);
+        setCartLines(p => [...p, { id:uid(), itemId:item.id, name:item.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:item.gst||0.05, itemDesc:"", _it:item }]);
       }
     }
   }, []);
@@ -1303,6 +1301,10 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     });
   }, [items, brands, settings]);
 
+  const inlineSearchResults = inlineSearch.trim().length > 0
+    ? enriched.filter(i => i.name.toLowerCase().includes(inlineSearch.toLowerCase()) || (i._b && i._b.name.toLowerCase().includes(inlineSearch.toLowerCase())))
+    : [];
+
   const searchResults = search.trim().length > 0
     ? enriched.filter(i => i.name.toLowerCase().includes(search.toLowerCase()) || (i._b && i._b.name.toLowerCase().includes(search.toLowerCase())))
     : [];
@@ -1312,12 +1314,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     const up = prices[priceType];
     if (!up) return toast("No price set for " + priceType.toUpperCase(),"warn");
     if (!defaultPT) setDefaultPT(priceType);
-    setCartLines(p => {
-      const ex = p.find(l => l.itemId===it.id && l.priceType===priceType);
-      if (ex) return p.map(l => l.itemId===it.id&&l.priceType===priceType?{...l,qty:l.qty+1}:l);
-      return [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05, itemDesc:"", _it:it }];
-    });
-    setPricePopup(null); setSearch("");
+    setCartLines(p => [...p, { id:uid(), itemId:it.id, name:it.name, priceType, unitPrice:up, originalPrice:up, customPrice:"", qty:1, itemDiscount:"", includeGST:false, gstPct:it.gst||0.05, itemDesc:"", _it:it }]);
+    setPricePopup(null); setSearch(""); setInlineSearch(""); setShowInlineAdd(false);
     toast(it.name + " added");
   }
 
@@ -1466,6 +1464,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11, marginBottom:12 }}>
                 <thead>
                   <tr style={{ background:"#f0f0f0" }}>
+                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc", width:"28px" }}>Sr.</th>
                     <th style={{ padding:"5px 7px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
                     <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
                     <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
@@ -1482,7 +1481,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                     const gstAmt = l.includeGST ? +(base*(l.gstPct||0.05)).toFixed(2) : 0;
                     const amt  = +(base+gstAmt).toFixed(2);
                     return (
-                      <tr key={l.id} style={{ borderBottom:"1px solid #ddd" }}>
+                       <tr key={l.id} style={{ borderBottom:"1px solid #ddd", background:i%2===0?"#fff":"#F7F9FC" }}>
+                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd", color:"#666", fontSize:10 }}>{i+1}</td>
                         <td style={{ padding:"5px 7px", border:"1px solid #ddd" }}>{l.name}{l.itemDesc?(<div style={{ fontSize:10, color:"#666", marginTop:2 }}>{l.itemDesc}</div>):null}</td>
                         <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
                         <td style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
@@ -1498,6 +1498,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               </table>
             );
           })()}
+          <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8, fontSize:11, color:"#555" }}>
+            <span>Total Items: <b>{saved.lines.length}</b> &nbsp;|&nbsp; Total Qty: <b>{saved.lines.reduce(function(s,l){return s+l.qty;},0)} pcs</b></span>
+          </div>
           <div style={{ width:"55%", marginLeft:"auto", fontSize:13 }}>
             <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Subtotal</span><b>{fp(saved.subtotal)}</b></div>
             {saved.billGST&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>GST ({((saved.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
@@ -1669,7 +1672,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         </div>
         <input style={Object.assign({},INP,{marginBottom:0})} placeholder="🔍 Search item name or brand..." value={search} onChange={e=>setSearch(e.target.value)} />
         {searchResults.length>0&&(
-          <div style={{ marginTop:6, maxHeight:220, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9 }}>
+          <div style={{ marginTop:6, maxHeight:200, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9, position:"relative", zIndex:50, background:"#fff", boxShadow:"0 4px 20px rgba(0,0,0,0.12)" }}>
             {searchResults.map(it=>(
               <button key={it.id} onClick={()=>{ 
                 if(defaultPT==="sdm"&&!sdmUnlockedEst){ setSdmPinPopup(true); return; }
@@ -1757,6 +1760,36 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               </div>
             );
           })}
+          {/* Inline add item button — always below last cart item */}
+          <div style={{ marginTop:8 }}>
+            <button onClick={()=>setShowInlineAdd(p=>!p)}
+              style={{ width:"100%", padding:"9px", borderRadius:8, border:"1.5px dashed "+C.blue, background:"#EFF6FF", color:C.blue, fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+              {showInlineAdd ? "▲ Close" : "➕ Add Another Item"}
+            </button>
+            {showInlineAdd && (
+              <div style={{ marginTop:8 }}>
+                <input style={Object.assign({},INP,{marginBottom:4})} placeholder="🔍 Search item..." value={inlineSearch} onChange={e=>setInlineSearch(e.target.value)} autoFocus />
+                {inlineSearchResults.length>0&&(
+                  <div style={{ maxHeight:200, overflowY:"auto", border:"1px solid "+C.border, borderRadius:9, background:"#fff", boxShadow:"0 4px 16px rgba(0,0,0,0.12)", marginBottom:4 }}>
+                    {inlineSearchResults.map(it=>(
+                      <button key={it.id} onClick={()=>{ defaultPT?addToCart(it,defaultPT):setPricePopup(it); setInlineSearch(""); }}
+                        style={{ display:"flex", justifyContent:"space-between", alignItems:"center", width:"100%", padding:"9px 12px", background:"#fff", border:"none", borderBottom:"1px solid "+C.border, cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}>
+                        <div>
+                          <div style={{ fontSize:12, fontWeight:600 }}>{it.name}</div>
+                          <div style={{ fontSize:10, color:C.mute }}>{it.cat}{it._b?" · "+it._b.code:""}</div>
+                        </div>
+                        <span style={{ fontSize:11, color:C.blue, fontWeight:700 }}>{defaultPT?"+("+defaultPT.toUpperCase()+")":"+ Select"}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button onClick={()=>{ setShowCustomItem(true); setShowInlineAdd(false); }}
+                  style={{ width:"100%", padding:"7px", borderRadius:7, border:"1.5px solid "+C.pl, background:C.plBg, color:C.pl, fontWeight:700, fontSize:11, cursor:"pointer", fontFamily:"inherit", marginTop:4 }}>
+                  + Custom Item
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
