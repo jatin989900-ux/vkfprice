@@ -496,8 +496,10 @@ function DeviceGate({ devices, onDevicesChange, onApproved }) {
 
   useEffect(() => {
     if (!existing) {
-      const newDev = { id:deviceId, info:deviceInfo, status:"pending", requestedAt:new Date().toISOString(), name:"" };
+      const isFirstDevice = !devices || devices.length === 0;
+      const newDev = { id:deviceId, info:deviceInfo, status:isFirstDevice?"approved":"pending", requestedAt:new Date().toISOString(), name:"" };
       onDevicesChange([...(devices||[]), newDev]);
+      if (isFirstDevice) onApproved();
     }
   }, []);
 
