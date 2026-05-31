@@ -473,7 +473,7 @@ function PINPad({ label, pin, onSuccess }) {
 }
 
 // ── LOGIN ─────────────────────────────────────────────────────────
-// ── DEVICE GATE ──────────────────────────────────────────────────
+// ── DEVICE HELPERS ───────────────────────────────────────────────
 function getOrCreateDeviceId() {
   let id = localStorage.getItem("vkf_device_id");
   if (!id) {
@@ -487,52 +487,6 @@ function getDeviceInfo() {
   const browser = ua.includes("Chrome") ? "Chrome" : ua.includes("Firefox") ? "Firefox" : ua.includes("Safari") ? "Safari" : "Browser";
   const os = ua.includes("Android") ? "Android" : ua.includes("iPhone") || ua.includes("iPad") ? "iOS" : ua.includes("Windows") ? "Windows" : "Other";
   return browser + " / " + os;
-}
-
-function DeviceGate({ devices, onDevicesChange, onApproved }) {
-  const deviceId   = getOrCreateDeviceId();
-  const deviceInfo = getDeviceInfo();
-  const existing   = (devices||[]).find(d => d.id === deviceId);
-
-  useEffect(() => {
-    if (!existing) {
-      const isFirstDevice = !devices || devices.length === 0;
-      const newDev = { id:deviceId, info:deviceInfo, status:isFirstDevice?"approved":"pending", requestedAt:new Date().toISOString(), name:"" };
-      onDevicesChange([...(devices||[]), newDev]);
-      if (isFirstDevice) onApproved();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (existing && existing.status === "approved") onApproved();
-  }, [existing]);
-
-  if (existing && existing.status === "approved") return null;
-  if (existing && existing.status === "blocked") {
-    return (
-      <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#1e293b,#0f172a)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
-        <div style={{ background:"#fff", borderRadius:22, padding:"32px 24px", maxWidth:320, width:"100%", textAlign:"center" }}>
-          <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
-          <div style={{ fontSize:16, fontWeight:800, color:C.red, marginBottom:8 }}>Device Blocked</div>
-          <div style={{ fontSize:13, color:C.sec }}>This device has been blocked by admin. Contact your admin for access.</div>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#1e293b,#0f172a)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
-      <div style={{ background:"#fff", borderRadius:22, padding:"32px 24px", maxWidth:320, width:"100%", textAlign:"center" }}>
-        <div style={{ fontSize:40, marginBottom:12 }}>📱</div>
-        <div style={{ fontSize:16, fontWeight:800, color:C.navy, marginBottom:8 }}>Waiting for Approval</div>
-        <div style={{ fontSize:13, color:C.sec, marginBottom:16 }}>This device has been registered and is waiting for admin approval. Ask your admin to approve this device in Settings.</div>
-        <div style={{ background:"#F3F4F6", borderRadius:10, padding:"10px 14px", fontSize:11, color:C.mute, wordBreak:"break-all" }}>
-          <b>Device ID:</b> {deviceId.slice(0,16)}...<br/>
-          <b>Info:</b> {deviceInfo}
-        </div>
-        <button onClick={() => window.location.reload()} style={{ marginTop:16, padding:"10px 24px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>🔄 Check Again</button>
-      </div>
-    </div>
-  );
 }
 
 function Login({ settings, onLogin }) {
@@ -2915,7 +2869,7 @@ export default function App() {
   const [estimates,  setEstimates]  = useState([]);
   const [devices,    setDevices]    = useState([]);
   const [pending,    setPending]    = useState([]);
-  const [deviceApproved, setDeviceApproved] = useState(false);
+  const [deviceStatus, setDeviceStatus] = useState("checking"); // checking | approved | pending | blocked
   const [role,       setRole]       = useState(null);
   const [ready,      setReady]      = useState(false);
   const [syncStatus, setSyncStatus] = useState("synced");
@@ -2946,8 +2900,25 @@ export default function App() {
       if (d.brands)    setBrands(d.brands);
       if (d.items)     setItems(d.items);
       if (d.estimates) setEstimates(d.estimates);
-      if (d.devices)   setDevices(d.devices);
       if (d.pending)   setPending(d.pending);
+      // Device check happens here — after real data is loaded from Firestore
+      const loadedDevices = d.devices || [];
+      setDevices(loadedDevices);
+      const myId = getOrCreateDeviceId();
+      const myInfo = getDeviceInfo();
+      const mine = loadedDevices.find(dv => dv.id === myId);
+      if (!mine) {
+        // First device ever OR new device
+        const isFirst = loadedDevices.length === 0;
+        const status = isFirst ? "approved" : "pending";
+        const newDev = { id:myId, info:myInfo, status, requestedAt:new Date().toISOString() };
+        const nextDevs = [...loadedDevices, newDev];
+        setDevices(nextDevs);
+        setDoc(FS.devices(), { v:nextDevs, updatedAt:new Date().toISOString() }).catch(()=>{});
+        setDeviceStatus(status);
+      } else {
+        setDeviceStatus(mine.status);
+      }
       setReady(true);
     }).catch(() => { setSyncStatus("offline"); setReady(true); });
   }, []);
@@ -2960,7 +2931,15 @@ export default function App() {
     const unsubB = onSnapshot(FS.brands(),    snap => { if (snap.exists()) setBrands(snap.data().v);    }, () => setSyncStatus("offline"));
     const unsubI = onSnapshot(FS.items(),     snap => { if (snap.exists()) setItems(snap.data().v);     }, () => setSyncStatus("offline"));
     const unsubE = onSnapshot(FS.estimates(), snap => { if (snap.exists()) setEstimates(snap.data().v); }, () => {});
-    const unsubD = onSnapshot(FS.devices(),   snap => { if (snap.exists()) setDevices(snap.data().v||[]); }, () => {});
+    const unsubD = onSnapshot(FS.devices(), snap => {
+      if (snap.exists()) {
+        const devs = snap.data().v||[];
+        setDevices(devs);
+        const myId = getOrCreateDeviceId();
+        const mine = devs.find(dv => dv.id === myId);
+        if (mine) setDeviceStatus(mine.status);
+      }
+    }, () => {});
     const unsubP = onSnapshot(FS.pending(),   snap => { if (snap.exists()) setPending(snap.data().v||[]); }, () => {});
     return () => { unsubS(); unsubB(); unsubI(); unsubE(); unsubD(); unsubP(); };
   }, [ready]);
@@ -2986,11 +2965,30 @@ export default function App() {
 
       <ToastHost />
       <div style={{ fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
-        {!deviceApproved && <DeviceGate devices={devices} onDevicesChange={saveDevices} onApproved={()=>setDeviceApproved(true)} />}
-        {deviceApproved && !role               && <Login       settings={settings} onLogin={setRole} />}
-        {deviceApproved && role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} pending={pending} onPendingChange={savePending} devices={devices} onDevicesChange={saveDevices} />}
-        {deviceApproved && role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} pending={pending} onPendingChange={savePending} />}
+        {deviceStatus === "pending" && (
+          <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#1e293b,#0f172a)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+            <div style={{ background:"#fff", borderRadius:22, padding:"32px 24px", maxWidth:320, width:"100%", textAlign:"center" }}>
+              <div style={{ fontSize:40, marginBottom:12 }}>📱</div>
+              <div style={{ fontSize:16, fontWeight:800, color:C.navy, marginBottom:8 }}>Waiting for Approval</div>
+              <div style={{ fontSize:13, color:C.sec, marginBottom:16 }}>This device is pending approval. Ask your admin to approve it in Settings → Registered Devices.</div>
+              <button onClick={()=>window.location.reload()} style={{ padding:"10px 24px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>🔄 Check Again</button>
+            </div>
+          </div>
+        )}
+        {deviceStatus === "blocked" && (
+          <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#1e293b,#0f172a)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+            <div style={{ background:"#fff", borderRadius:22, padding:"32px 24px", maxWidth:320, width:"100%", textAlign:"center" }}>
+              <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
+              <div style={{ fontSize:16, fontWeight:800, color:C.red, marginBottom:8 }}>Device Blocked</div>
+              <div style={{ fontSize:13, color:C.sec }}>This device has been blocked. Contact your admin.</div>
+            </div>
+          </div>
+        )}
+        {deviceStatus === "approved" && !role               && <Login       settings={settings} onLogin={setRole} />}
+        {deviceStatus === "approved" && role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} pending={pending} onPendingChange={savePending} devices={devices} onDevicesChange={saveDevices} />}
+        {deviceStatus === "approved" && role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} pending={pending} onPendingChange={savePending} />}
       </div>
     </div>
   );
 }
+
