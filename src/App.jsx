@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { initializeApp } from "firebase/app";
@@ -18,12 +19,14 @@ const FS  = {
   brands:    () => doc(db, "vkf", "brands"),
   items:     () => doc(db, "vkf", "items"),
   estimates: () => doc(db, "vkf", "estimates"),
+  devices:   () => doc(db, "vkf", "devices"),
+  pending:   () => doc(db, "vkf", "pending"),
 };
 async function fsLoad() {
   try {
-    const [sS, bS, iS, eS] = await Promise.all([getDoc(FS.settings()), getDoc(FS.brands()), getDoc(FS.items()), getDoc(FS.estimates())]);
-    return { settings: sS.exists() ? sS.data().v : null, brands: bS.exists() ? bS.data().v : null, items: iS.exists() ? iS.data().v : null, estimates: eS.exists() ? eS.data().v : [] };
-  } catch (e) { console.error(e); return { settings: null, brands: null, items: null, estimates: [] }; }
+    const [sS, bS, iS, eS, dS, pS] = await Promise.all([getDoc(FS.settings()), getDoc(FS.brands()), getDoc(FS.items()), getDoc(FS.estimates()), getDoc(FS.devices()), getDoc(FS.pending())]);
+    return { settings: sS.exists() ? sS.data().v : null, brands: bS.exists() ? bS.data().v : null, items: iS.exists() ? iS.data().v : null, estimates: eS.exists() ? eS.data().v : [], devices: dS.exists() ? dS.data().v : [], pending: pS.exists() ? pS.data().v : [] };
+  } catch (e) { console.error(e); return { settings: null, brands: null, items: null, estimates: [], devices: [], pending: [] }; }
 }
 async function fsSave(key, value) {
   await setDoc(FS[key](), { v: value, updatedAt: new Date().toISOString() });
@@ -470,6 +473,66 @@ function PINPad({ label, pin, onSuccess }) {
 }
 
 // ── LOGIN ─────────────────────────────────────────────────────────
+// ── DEVICE GATE ──────────────────────────────────────────────────
+function getOrCreateDeviceId() {
+  let id = localStorage.getItem("vkf_device_id");
+  if (!id) {
+    id = "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem("vkf_device_id", id);
+  }
+  return id;
+}
+function getDeviceInfo() {
+  const ua = navigator.userAgent;
+  const browser = ua.includes("Chrome") ? "Chrome" : ua.includes("Firefox") ? "Firefox" : ua.includes("Safari") ? "Safari" : "Browser";
+  const os = ua.includes("Android") ? "Android" : ua.includes("iPhone") || ua.includes("iPad") ? "iOS" : ua.includes("Windows") ? "Windows" : "Other";
+  return browser + " / " + os;
+}
+
+function DeviceGate({ devices, onDevicesChange, onApproved }) {
+  const deviceId   = getOrCreateDeviceId();
+  const deviceInfo = getDeviceInfo();
+  const existing   = (devices||[]).find(d => d.id === deviceId);
+
+  useEffect(() => {
+    if (!existing) {
+      const newDev = { id:deviceId, info:deviceInfo, status:"pending", requestedAt:new Date().toISOString(), name:"" };
+      onDevicesChange([...(devices||[]), newDev]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (existing && existing.status === "approved") onApproved();
+  }, [existing]);
+
+  if (existing && existing.status === "approved") return null;
+  if (existing && existing.status === "blocked") {
+    return (
+      <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#1e293b,#0f172a)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div style={{ background:"#fff", borderRadius:22, padding:"32px 24px", maxWidth:320, width:"100%", textAlign:"center" }}>
+          <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
+          <div style={{ fontSize:16, fontWeight:800, color:C.red, marginBottom:8 }}>Device Blocked</div>
+          <div style={{ fontSize:13, color:C.sec }}>This device has been blocked by admin. Contact your admin for access.</div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(160deg,#1e293b,#0f172a)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div style={{ background:"#fff", borderRadius:22, padding:"32px 24px", maxWidth:320, width:"100%", textAlign:"center" }}>
+        <div style={{ fontSize:40, marginBottom:12 }}>📱</div>
+        <div style={{ fontSize:16, fontWeight:800, color:C.navy, marginBottom:8 }}>Waiting for Approval</div>
+        <div style={{ fontSize:13, color:C.sec, marginBottom:16 }}>This device has been registered and is waiting for admin approval. Ask your admin to approve this device in Settings.</div>
+        <div style={{ background:"#F3F4F6", borderRadius:10, padding:"10px 14px", fontSize:11, color:C.mute, wordBreak:"break-all" }}>
+          <b>Device ID:</b> {deviceId.slice(0,16)}...<br/>
+          <b>Info:</b> {deviceInfo}
+        </div>
+        <button onClick={() => window.location.reload()} style={{ marginTop:16, padding:"10px 24px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>🔄 Check Again</button>
+      </div>
+    </div>
+  );
+}
+
 function Login({ settings, onLogin }) {
   const [role, setRole] = useState(null);
   const roles = [
@@ -882,7 +945,7 @@ function ImportModal({ brands, items, onItemsChange, onClose, cats }) {
 function todayISO() { const d = new Date(); return d.toISOString().slice(0,10); }
 const EI = { cat:"Bed Sheets", bId:"", name:"", purchaseEx:"", gst:0.05, customRL:"", customDM:"", customRLPrice:"", customDMPrice:"", sdmAddon:"", sdmPct:"", plAddon:"", customAddon:"", purchaseDate:"", highlighted:false, commission:"", highlightNote:"", pinned:false, active:true, notes:"" };
 
-function MasterView({ brands, items, onItemsChange, settings }) {
+function MasterView({ brands, items, onItemsChange, settings, pending, onPendingChange }) {
   const [open, setOpen] = useState(false); const [eid, setEid] = useState(null);
   const [form, setForm] = useState(EI); const [errs, setErrs] = useState({});
   const [fCat, setFCat] = useState("All"); const [fSt, setFSt] = useState("Active"); const [fBrand, setFBrand] = useState("All");
@@ -977,6 +1040,12 @@ function MasterView({ brands, items, onItemsChange, settings }) {
       <div style={{ background:C.ambBg, border:"1px solid #FCD34D", borderRadius:10, padding:"9px 13px", marginBottom:12, fontSize:12, color:C.amb, fontWeight:600 }}>
         ⚠ Purchase WITHOUT GST. RL/DM/PL are Inc-GST. SDM is Ex-GST (customer pays + GST on top).
       </div>
+      {/* Pending items panel */}
+      {(pending||[]).filter(p=>p.status==="pending").length>0&&(
+        <PendingItemsPanel pending={pending} onPendingChange={onPendingChange} onItemsChange={onItemsChange} items={items} brands={brands} settings={settings} />
+      )}
+      {/* Missing purchase price panel */}
+      <MissingPricePanel items={items} brands={brands} onItemsChange={onItemsChange} />
       {/* Scroll buttons */}
       {showScroll && (
         <div style={{ position:"fixed", right:16, bottom:80, zIndex:300, display:"flex", flexDirection:"column", gap:8 }}>
@@ -1198,8 +1267,9 @@ const PRICE_TYPES = [
 // ── WHATSAPP HELPER ───────────────────────────────────────────────
 const WA_NUMBER = "917532002298"; // kept for backward compat
 const WA_TEAM = "911140553488";
-function buildWAText(est, co) {
-  let msg = `*ESTIMATE — ${est.number}*\n${co}\nDate: ${fmtDate(est.createdAt)}\nSalesman: ${est.salesmanName}`;
+function buildWAText(est, co, forCustomer) {
+  let msg = `*ESTIMATE — ${est.number}*\n${co}\nDate: ${fmtDate(est.createdAt)}`;
+  if (!forCustomer) msg += `\nSalesman: ${est.salesmanName}`;
   if (est.custName)  msg += `\nCustomer: ${est.custName}`;
   if (est.custPhone) msg += ` | ${est.custPhone}`;
   msg += `\n\n*Items:*`;
@@ -1213,11 +1283,13 @@ function buildWAText(est, co) {
   });
   msg += `\n\nSubtotal: ${fp(est.subtotal)}`;
   if (est.billGST)    msg += `\nGST: ${fp(est.billGSTAmt)}`;
-  if (est.otherAmt)   msg += `\n${est.otherLabel||"Other"}: ${fp(est.otherAmt)}`;
+  if (est.packingAmt>0) msg += `\nPacking & Forwarding: ${fp(est.packingAmt)}`;
+  if (est.biltyAmt>0)   msg += `\nBilty Charges: ${fp(est.biltyAmt)}`;
   if (est.adjustment) msg += `\nAdjustment: ${est.adjustment>0?"+":""}${fp(est.adjustment)}`;
   if (est.roundOff)    msg += `\nRound Off: ${est.roundOff>0?"+":""}${fp(est.roundOff)}`;
   msg += `\n*TOTAL: ${fp(est.grandTotal)}*`;
   if (est.narration)  msg += `\n\nNote: ${est.narration}`;
+  if (est.divSummary) msg += `\n📦 ${est.divSummary}`;
   return encodeURIComponent(msg);
 }
 
@@ -1226,14 +1298,14 @@ const PRINT_CSS = `
 @media print {
   body { margin: 0; }
   body * { visibility: hidden !important; }
-  #vkf-print-area { display: block !important; position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: #fff !important; padding: 0 !important; font-size: 11px !important; }
-  #vkf-print-area * { visibility: visible !important; }
-  #vkf-print-area table { page-break-inside: avoid; }
+  #vkf-print-area { display: block !important; position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: #fff !important; padding: 8px 10px !important; font-size: 11px !important; }
+  #vkf-print-area * { visibility: visible !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  #vkf-print-area tr { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 }
 `;
 
 // ── ESTIMATE VIEW ─────────────────────────────────────────────────
-function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isAdmin, initialEst, onEditDone }) {
+function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isAdmin, initialEst, onEditDone, pending, onPendingChange }) {
   const salesmen = settings.salesmen || [];
   const prefix   = settings.estimatePrefix || "VKF";
 
@@ -1245,8 +1317,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [defaultPT,    setDefaultPT]    = useState("");
   const [billGST,      setBillGST]      = useState(false);
   const [billGSTPct,   setBillGSTPct]   = useState(0.05);
-  const [otherLabel,   setOtherLabel]   = useState("");
-  const [otherAmt,     setOtherAmt]     = useState("");
+  const [packingAmt,   setPackingAmt]   = useState("");
+  const [biltyAmt,     setBiltyAmt]     = useState("");
   const [adjustment,   setAdjustment]   = useState("");
   const [narration,    setNarration]    = useState("");
   const [pricePopup,   setPricePopup]   = useState(null);
@@ -1264,6 +1336,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [customItemQty,   setCustomItemQty]   = useState("1");
   const [showInlineAdd,   setShowInlineAdd]   = useState(false);
   const [inlineSearch,    setInlineSearch]    = useState("");
+  const [dividerCounts,   setDividerCounts]   = useState({ bale:0, bundle:0 });
 
   useEffect(() => {
     if (!document.getElementById("vkf-print-css")) {
@@ -1336,6 +1409,13 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     toast(name + " added");
   }
 
+  function addDivider(type) {
+    const num = (dividerCounts[type]||0) + 1;
+    const label = (type === "bale" ? "Bale " : "Bundle ") + num;
+    setDividerCounts(p => ({...p, [type]: num}));
+    setCartLines(p => [...p, { id:uid(), isDivider:true, dividerType:type, dividerLabel:label }]);
+  }
+
   function effPrice(l) { const cp=parseFloat(l.customPrice); return (!isNaN(cp)&&cp>0)?cp:l.unitPrice; }
 
   function lineTotal(l) {
@@ -1349,19 +1429,22 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     if (!l._it||!l._it.purchaseEx) return null;
     const ep = effPrice(l); const disc=parseFloat(l.itemDiscount)||0;
     const sellAfterDisc = ep*(1-disc/100);
-    const sellExGST = l.includeGST ? sellAfterDisc/(1+l.gstPct) : sellAfterDisc;
-    return +((sellExGST-l._it.purchaseEx)*l.qty).toFixed(2);
+    // includeGST=true means we charge GST ON TOP of price → our sell ex-GST = sellAfterDisc
+    // includeGST=false means price is inclusive or no GST → sell ex-GST = sellAfterDisc/(1+gst) if item has gst
+    const purchaseEx = parseFloat(l._it.purchaseEx)||0;
+    const sellExGST = sellAfterDisc; // GST is charged ON TOP, doesn't reduce our revenue
+    return +((sellExGST - purchaseEx)*l.qty).toFixed(2);
   }
 
-  const subtotal    = cartLines.reduce((s,l)=>s+lineTotal(l),0);
+  const subtotal    = cartLines.filter(l=>!l.isDivider).reduce((s,l)=>s+lineTotal(l),0);
   const billGSTAmt  = billGST?+(subtotal*billGSTPct).toFixed(2):0;
-  const otherAmtN   = parseFloat(otherAmt)||0;
+  const otherAmtN   = (parseFloat(packingAmt)||0) + (parseFloat(biltyAmt)||0);
   const adjN        = parseFloat(adjustment)||0;
   const roundOffN   = parseFloat(roundOff)||0;
   const preRound    = +(subtotal+billGSTAmt+otherAmtN+adjN).toFixed(2);
   const autoRoundSuggestion = roundOffN===0 ? +(Math.round(preRound)-preRound).toFixed(2) : null;
   const grandTotal  = +(preRound+roundOffN).toFixed(2);
-  const totalProfit = cartLines.reduce((s,l)=>{ const p=lineProfit(l); return s+(p||0); },0);
+  const totalProfit = cartLines.filter(l=>!l.isDivider).reduce((s,l)=>{ const p=lineProfit(l); return s+(p||0); },0);
 
   function nextEstNo() {
     const used = (estimates||[]).map(e => parseInt((e.number||"").replace(/[^0-9]/g,""))||0);
@@ -1374,15 +1457,22 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     if (!custPhone.trim()) return toast("Customer phone number is required","err");
     if (!cartLines.length) return toast("Add at least one item","err");
     const existing = editingEstId ? (estimates||[]).find(e=>e.id===editingEstId) : null;
+    // Build divider summary e.g. "2 Bale & 1 Bundle"
+    const divSummary = (() => {
+      const counts = {};
+      cartLines.filter(l=>l.isDivider).forEach(l=>{ counts[l.dividerType]=(counts[l.dividerType]||0)+1; });
+      return Object.entries(counts).map(([k,v])=>v+" "+k.charAt(0).toUpperCase()+k.slice(1)+(v>1?"s":"")).join(" & ");
+    })();
     const est = {
       id:       existing ? existing.id     : uid(),
       number:   existing ? existing.number : nextEstNo(),
       createdAt:existing ? existing.createdAt : new Date().toISOString(),
       updatedAt:new Date().toISOString(),
       salesmanName, custName, custPhone,
+      divSummary,
       lines: cartLines.map(l=>{ const {_it,...rest}=l; return rest; }),
       billGST, billGSTPct, billGSTAmt,
-      otherLabel, otherAmt:otherAmtN,
+      packingAmt:parseFloat(packingAmt)||0, biltyAmt:parseFloat(biltyAmt)||0, otherAmt:otherAmtN,
       adjustment:adjN, narration,
       subtotal, grandTotal, totalProfit, roundOff:roundOffN,
       status:"active",
@@ -1391,6 +1481,23 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
       ? (estimates||[]).map(e=>e.id===existing.id?est:e)
       : [...(estimates||[]),est];
     onEstimatesSave(next);
+    // Send custom items to pending queue for admin review
+    if (onPendingChange) {
+      const customItems = cartLines.filter(l=>l.isCustom && !l.isDivider);
+      if (customItems.length > 0) {
+        const newPending = customItems.map(l => ({
+          id: "pend_"+uid(),
+          name: l.name,
+          priceUsed: effPrice(l),
+          estimateNo: est.number,
+          salesmanName: est.salesmanName,
+          submittedAt: new Date().toISOString(),
+          status: "pending",
+        }));
+        const curPending = typeof pending !== "undefined" ? pending : [];
+        onPendingChange([...(curPending||[]), ...newPending]);
+      }
+    }
     setSaved(est);
     setEditingEstId(null);
     if (onEditDone && existing) onEditDone();
@@ -1399,7 +1506,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
   function clearAll() {
     setCartLines([]); setCustName(""); setCustPhone(""); setBillGST(false);
-    setOtherLabel(""); setOtherAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff(""); setEditingEstId(null);
+    setPackingAmt(""); setBiltyAmt(""); setAdjustment(""); setNarration(""); setSaved(null); setDefaultPT(""); setRoundOff(""); setEditingEstId(null); setDividerCounts({bale:0,bundle:0});
   }
 
   function loadEstimate(est) {
@@ -1407,8 +1514,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     setCustName(est.custName||"");
     setCustPhone(est.custPhone||"");
     setNarration(est.narration||"");
-    setOtherLabel(est.otherLabel||"");
-    setOtherAmt(est.otherAmt?String(est.otherAmt):"");
+    setPackingAmt(est.packingAmt?String(est.packingAmt):"");
+    setBiltyAmt(est.biltyAmt?String(est.biltyAmt):"");
     setAdjustment(est.adjustment?String(est.adjustment):"");
     setRoundOff(est.roundOff?String(est.roundOff):"");
     setBillGST(!!est.billGST);
@@ -1447,30 +1554,30 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     return (
       <div style={{ padding:"16px 16px 80px" }}>
         {/* Hidden clean print area */}
-        <div id="vkf-print-area" style={{ display:"none", fontFamily:"Arial,sans-serif", fontSize:11, color:"#000", padding:12 }}>
-          <div style={{ textAlign:"center", borderBottom:"2px solid #000", paddingBottom:10, marginBottom:12 }}>
-            <div style={{ fontSize:17, fontWeight:900 }}>{settings.co}</div>
-            <div style={{ fontSize:11 }}>{settings.tag}</div>
-            <div style={{ fontSize:13, fontWeight:700, marginTop:4, letterSpacing:1 }}>ESTIMATE / PERFORMA</div>
+        <div id="vkf-print-area" style={{ display:"none", fontFamily:"Arial,sans-serif", fontSize:12, color:"#000", padding:12, fontWeight:500 }}>
+          <div style={{ textAlign:"center", borderBottom:"2px solid #000", paddingBottom:6, marginBottom:8 }}>
+            <div style={{ fontSize:15, fontWeight:900 }}>{settings.co}</div>
+            <div style={{ fontSize:10 }}>{settings.tag}</div>
+            <div style={{ fontSize:12, fontWeight:700, marginTop:3, letterSpacing:1 }}>ESTIMATE / PERFORMA</div>
           </div>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12, fontSize:12 }}>
-            <div><b>Estimate No:</b> {saved.number}<br/><b>Date:</b> {fmtDate(saved.createdAt)}<br/><b>Salesman:</b> {saved.salesmanName}</div>
-            <div style={{ textAlign:"right" }}>{saved.custName?(<div><b>Customer:</b> {saved.custName}</div>):null}{saved.custPhone?(<div><b>Phone:</b> {saved.custPhone}</div>):null}</div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:11 }}>
+            <div><b>Est No:</b> {saved.number} &nbsp; <b>Date:</b> {fmtDate(saved.createdAt)}</div>
+            <div style={{ textAlign:"right" }}>{saved.custName?(<span><b>Customer:</b> {saved.custName} &nbsp;</span>):null}{saved.custPhone?(<span><b>Ph:</b> {saved.custPhone}</span>):null}</div>
           </div>
           {(()=>{
             const hasDisc = saved.lines.some(l=>parseFloat(l.itemDiscount)>0);
             const hasGST  = saved.lines.some(l=>l.includeGST);
             return (
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11, marginBottom:12 }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11, marginBottom:12, fontWeight:500 }}>
                 <thead>
-                  <tr style={{ background:"#f0f0f0" }}>
-                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc", width:"28px" }}>Sr.</th>
-                    <th style={{ padding:"5px 7px", textAlign:"left", border:"1px solid #ccc" }}>Item</th>
-                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>Qty</th>
-                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ccc" }}>Rate</th>
-                    {hasDisc && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>Disc%</th>}
-                    {hasGST  && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ccc" }}>GST</th>}
-                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ccc" }}>Amount</th>
+                  <tr style={{ background:"#E5E7EB" }}>
+                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999", width:"28px" }}>Sr.</th>
+                    <th style={{ padding:"5px 7px", textAlign:"left", border:"1px solid #999" }}>Item</th>
+                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999" }}>Qty</th>
+                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #999" }}>Rate</th>
+                    {hasDisc && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999" }}>Disc%</th>}
+                    {hasGST  && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999" }}>GST</th>}
+                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #999" }}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1481,16 +1588,16 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                     const gstAmt = l.includeGST ? +(base*(l.gstPct||0.05)).toFixed(2) : 0;
                     const amt  = +(base+gstAmt).toFixed(2);
                     return (
-                       <tr key={l.id} style={{ borderBottom:"1px solid #ddd", background:i%2===0?"#fff":"#F7F9FC" }}>
-                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd", color:"#666", fontSize:10 }}>{i+1}</td>
-                        <td style={{ padding:"5px 7px", border:"1px solid #ddd" }}>{l.name}{l.itemDesc?(<div style={{ fontSize:10, color:"#666", marginTop:2 }}>{l.itemDesc}</div>):null}</td>
-                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{l.qty}</td>
-                        <td style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #ddd" }}>{fp(ep)}</td>
-                        {hasDisc && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>{disc>0?disc+"%":"-"}</td>}
-                        {hasGST  && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #ddd" }}>
+                       <tr key={l.id} style={{ borderBottom:"1px solid #bbb", background:i%2===0?"#fff":"#F7F9FC" }}>
+                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb", color:"#666", fontSize:10 }}>{i+1}</td>
+                        <td style={{ padding:"5px 7px", border:"1px solid #bbb", fontWeight:600 }}>{l.name}{l.itemDesc?(<div style={{ fontSize:10, color:"#666", marginTop:2 }}>{l.itemDesc}</div>):null}</td>
+                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb" }}>{l.qty}</td>
+                        <td style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #bbb" }}>{fp(ep)}</td>
+                        {hasDisc && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb" }}>{disc>0?disc+"%":"-"}</td>}
+                        {hasGST  && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb" }}>
                           {l.includeGST ? <span style={{ color:"#B45309" }}>+{((l.gstPct||0.05)*100).toFixed(0)}%<br/>{fp(gstAmt)}</span> : "-"}
                         </td>}
-                        <td style={{ padding:"5px 4px", textAlign:"right", fontWeight:700, border:"1px solid #ddd" }}>{fp(amt)}</td>
+                        <td style={{ padding:"5px 4px", textAlign:"right", fontWeight:700, border:"1px solid #bbb" }}>{fp(amt)}</td>
                       </tr>
                     );
                   })}
@@ -1501,21 +1608,24 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
           <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8, fontSize:11, color:"#555" }}>
             <span>Total Items: <b>{saved.lines.length}</b> &nbsp;|&nbsp; Total Qty: <b>{saved.lines.reduce(function(s,l){return s+l.qty;},0)} pcs</b></span>
           </div>
-          <div style={{ width:"55%", marginLeft:"auto", fontSize:13 }}>
+          <div style={{ width:"55%", marginLeft:"auto", fontSize:12, fontWeight:600 }}>
             <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Subtotal</span><b>{fp(saved.subtotal)}</b></div>
             {saved.billGST&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>GST ({((saved.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(saved.billGSTAmt)}</span></div>}
-            {saved.otherAmt>0&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>{saved.otherLabel||"Other"}</span><span>{fp(saved.otherAmt)}</span></div>}
+            {saved.packingAmt>0&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Packing & Forwarding</span><span>{fp(saved.packingAmt)}</span></div>}
+              {saved.biltyAmt>0&&<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Bilty Charges</span><span>{fp(saved.biltyAmt)}</span></div>}
             {saved.adjustment?<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Adjustment</span><span>{saved.adjustment>0?"+":""}{fp(saved.adjustment)}</span></div>:null}
               {saved.roundOff?<div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Round Off</span><span>{saved.roundOff>0?"+":""}{fp(saved.roundOff)}</span></div>:null}
             <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", fontWeight:900, fontSize:16, borderTop:"2px solid #000" }}><span>GRAND TOTAL</span><span>{fp(saved.grandTotal)}</span></div>
           </div>
-          {saved.narration&&<div style={{ marginTop:12, fontSize:11, borderTop:"1px dashed #ccc", paddingTop:8 }}><b>Note:</b> {saved.narration}</div>}
-          <div style={{ marginTop:16, fontSize:10, textAlign:"center", color:"#888", borderTop:"1px dashed #ccc", paddingTop:8 }}>This is a computer generated estimate — {settings.co}</div>
+          {saved.narration&&<div style={{ marginTop:8, fontSize:11, borderTop:"1px solid #999", paddingTop:6 }}><b>Note:</b> {saved.narration}</div>}
+          {saved.divSummary&&<div style={{ marginTop:6, fontSize:11, fontWeight:700 }}>📦 {saved.divSummary}</div>}
+          <div style={{ marginTop:10, fontSize:10, textAlign:"center", color:"#888", borderTop:"1px solid #999", paddingTop:6 }}>This is a computer generated estimate — {settings.co}</div>
         </div>
 
         <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:12, padding:"14px", marginBottom:14 }}>
           <div style={{ fontSize:16, fontWeight:800, color:C.profit, marginBottom:2 }}>✅ {saved.number} saved!</div>
-          <div style={{ fontSize:12, color:C.profit }}>By {saved.salesmanName}{saved.custName?" · "+saved.custName:""}</div>
+          <div style={{ fontSize:12, color:C.profit }}>{saved.custName?" · "+saved.custName:""}</div>
+          {saved.divSummary&&<div style={{ fontSize:11, color:C.profit, marginTop:2 }}>📦 {saved.divSummary}</div>}
           <div style={{ fontSize:18, fontWeight:900, color:C.navy, marginTop:4 }}>{fp(saved.grandTotal)}</div>
         </div>
 
@@ -1525,7 +1635,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         </div>
         <div style={{ display:"grid", gridTemplateColumns:saved.custPhone?"1fr 1fr":"1fr", gap:10, marginBottom:10 }}>
           {saved.custPhone && (
-            <a href={"https://wa.me/"+saved.custPhone.replace(/[^0-9]/g,"").replace(/^0/,"91")+"?text="+buildWAText(saved,settings.co)}
+            <a href={"https://wa.me/"+saved.custPhone.replace(/[^0-9]/g,"").replace(/^0/,"91")+"?text="+buildWAText(saved,settings.co,true)}
               target="_blank" rel="noopener noreferrer"
               style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"13px 16px", borderRadius:10, background:"#25D366", color:"#fff", fontWeight:700, fontSize:13, textDecoration:"none" }}>
               💬 Customer
@@ -1692,11 +1802,41 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
 
       {cartLines.length>0&&(
         <div style={SS}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-            <div style={{ fontSize:12, fontWeight:800, color:C.navy }}>Cart ({cartLines.length} item{cartLines.length!==1?"s":""})</div>
-            <div style={{ fontSize:11, color:C.sec, fontWeight:700 }}>Total Qty: {cartLines.reduce((s,l)=>s+l.qty,0)} pcs</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <div style={{ fontSize:12, fontWeight:800, color:C.navy }}>Cart ({cartLines.filter(l=>!l.isDivider).length} item{cartLines.filter(l=>!l.isDivider).length!==1?"s":""})</div>
+            <div style={{ fontSize:11, color:C.sec, fontWeight:700 }}>Total Qty: {cartLines.filter(l=>!l.isDivider).reduce((s,l)=>s+l.qty,0)} pcs</div>
+          </div>
+          <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+            <button onClick={()=>addDivider("bale")} style={{ flex:1, padding:"7px", borderRadius:8, border:"1.5px solid #B45309", background:"#FEF3C7", color:"#92400E", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>📦 Close Bale</button>
+            <button onClick={()=>addDivider("bundle")} style={{ flex:1, padding:"7px", borderRadius:8, border:"1.5px solid #7C3AED", background:"#F5F3FF", color:"#5B21B6", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>🎁 Close Bundle</button>
           </div>
           {cartLines.map(l=>{
+            if (l.isDivider) {
+              const bg = l.dividerType==="bale" ? "#FEF3C7" : "#F5F3FF";
+              const col = l.dividerType==="bale" ? "#92400E" : "#5B21B6";
+              const br = l.dividerType==="bale" ? "#F59E0B" : "#7C3AED";
+              const icon = l.dividerType==="bale" ? "📦" : "🎁";
+              const grpItems = cartLines.slice(0, cartLines.indexOf(l)).filter(x=>!x.isDivider && (cartLines.slice(0,cartLines.indexOf(x)+1).filter(d=>d.isDivider).length === cartLines.slice(0,cartLines.indexOf(l)).filter(d=>d.isDivider).length));
+              const grpQty = (() => {
+                let lastDiv = -1;
+                for(let i=0;i<cartLines.length;i++){
+                  if(cartLines[i].id===l.id){ 
+                    return cartLines.slice(lastDiv+1,i).filter(x=>!x.isDivider).reduce((s,x)=>s+x.qty,0);
+                  }
+                  if(cartLines[i].isDivider) lastDiv=i;
+                }
+                return 0;
+              })();
+              return (
+                <div key={l.id} style={{ background:bg, border:"1.5px solid "+br, borderRadius:8, padding:"7px 12px", marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <span style={{ fontSize:12, fontWeight:800, color:col }}>{icon} {l.dividerLabel}</span>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontSize:11, color:col, fontWeight:600 }}>{grpQty} pcs</span>
+                    <button onClick={()=>setCartLines(p=>p.filter(x=>x.id!==l.id))} style={{ width:22,height:22,borderRadius:5,border:"1px solid "+br,background:"#fff",cursor:"pointer",fontSize:11,color:col,fontFamily:"inherit" }}>✕</button>
+                  </div>
+                </div>
+              );
+            }
             const pt = l.isCustom
               ? { id:"custom", label:"Custom", col:"#7C3AED", bg:"#F5F3FF" }
               : (PRICE_TYPES.find(p=>p.id===l.priceType)||PRICE_TYPES[0]);
@@ -1808,9 +1948,9 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               {billGST&&<span style={{ fontSize:12,fontWeight:700,color:C.amb }}>{fp(billGSTAmt)}</span>}
             </div>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:8, marginBottom:10 }}>
-            <Fld label="Other Charges"><input style={INP} placeholder="e.g. Packing" value={otherLabel} onChange={e=>setOtherLabel(e.target.value)} /></Fld>
-            <Fld label="Amount ₹"><input style={INP} type="number" placeholder="0" value={otherAmt} onChange={e=>setOtherAmt(e.target.value)} /></Fld>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
+            <Fld label="Packing & Forwarding ₹"><input style={INP} type="number" placeholder="0 (optional)" value={packingAmt} onChange={e=>setPackingAmt(e.target.value)} /></Fld>
+            <Fld label="Bilty Charges ₹"><input style={INP} type="number" placeholder="0 (optional)" value={biltyAmt} onChange={e=>setBiltyAmt(e.target.value)} /></Fld>
           </div>
           <Fld label="Adjustment ₹" hint="Use − for discount"><input style={INP} type="number" placeholder="e.g. -50" value={adjustment} onChange={e=>setAdjustment(e.target.value)} /></Fld>
           <Fld label="Round Off ₹" hint="e.g. -2 or +3 to make round figure">
@@ -1906,7 +2046,8 @@ function EstimateCard({ e, cancelled, age, canEdit, isAdmin, H24, H48, settings,
           <div style={{ marginTop:8, paddingTop:6, borderTop:"1px solid "+C.border }}>
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Subtotal</span><span>{fp(e.subtotal)}</span></div>
             {e.billGST && <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.amb, marginBottom:2 }}><span>GST ({((e.billGSTPct||0.05)*100).toFixed(0)}%)</span><span>{fp(e.billGSTAmt)}</span></div>}
-            {e.otherAmt>0 && <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>{e.otherLabel||"Other"}</span><span>{fp(e.otherAmt)}</span></div>}
+            {(e.packingAmt||0)>0 && <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Packing & Forwarding</span><span>{fp(e.packingAmt)}</span></div>}
+                    {(e.biltyAmt||0)>0 && <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Bilty Charges</span><span>{fp(e.biltyAmt)}</span></div>}
             {e.adjustment ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Adjustment</span><span>{e.adjustment>0?"+":""}{fp(e.adjustment)}</span></div> : null}
             {e.roundOff ? <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sec, marginBottom:2 }}><span>Round Off</span><span>{e.roundOff>0?"+":""}{fp(e.roundOff)}</span></div> : null}
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:14, fontWeight:900, color:C.navy, borderTop:"1px solid "+C.border, paddingTop:5, marginTop:3 }}><span>TOTAL</span><span>{fp(e.grandTotal)}</span></div>
@@ -2197,7 +2338,7 @@ function PriceListView({ brands, items, settings, isAdmin, onAddToEstimate }) {
 }
 
 // ── DASHBOARD VIEW ────────────────────────────────────────────────
-function DashboardView({ brands, items, settings, onSettingsChange, estimates, onEstimatesSave }) {
+function DashboardView({ brands, items, settings, onSettingsChange, estimates, onEstimatesSave, pending, onPendingChange }) {
   const [fBrand, setFBrand] = useState("All");
   const [showEst,    setShowEst]    = useState(false);
   const [editingEst, setEditingEst] = useState(null);
@@ -2253,7 +2394,7 @@ function DashboardView({ brands, items, settings, onSettingsChange, estimates, o
               <div style={{ color:"#fff", fontWeight:800, fontSize:14 }}>✏️ Edit {editingEst.number}</div>
               <button onClick={()=>setEditingEst(null)} style={{ padding:"6px 12px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.3)", background:"rgba(255,255,255,0.1)", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontWeight:600, fontSize:12 }}>✕ Close</button>
             </div>
-            <EstimateView brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={(next)=>{ onEstimatesSave(next); }} isAdmin={true} initialEst={editingEst} onEditDone={()=>setEditingEst(null)} />
+            <EstimateView brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={(next)=>{ onEstimatesSave(next); }} isAdmin={true} initialEst={editingEst} onEditDone={()=>setEditingEst(null)} pending={pending} onPendingChange={onPendingChange} />
           </div>
         </div>
       )}
@@ -2373,6 +2514,148 @@ function DashboardView({ brands, items, settings, onSettingsChange, estimates, o
 }
 
 // ── SETTINGS VIEW ─────────────────────────────────────────────────
+// ── PENDING ITEMS PANEL ──────────────────────────────────────────
+function PendingItemsPanel({ pending, onPendingChange, onItemsChange, items, brands, settings }) {
+  const [expandId, setExpandId] = useState(null);
+  const [form, setForm] = useState({});
+  const active = (pending||[]).filter(p=>p.status==="pending");
+  const SS = { background:C.card, border:"1px solid "+C.border, borderRadius:12, padding:"14px", marginBottom:10 };
+
+  function approve(p) {
+    const f = form[p.id]||{};
+    if (!f.purchaseEx) return toast("Enter purchase price first","err");
+    const cats = settings.categories||CATS;
+    const newItem = {
+      id:uid(), name:p.name, cat:f.cat||cats[0], bId:f.bId||"",
+      purchaseEx:parseFloat(f.purchaseEx), gst:parseFloat(f.gst||"0.05"),
+      customRL:"", customDM:"", customRLPrice:"", customDMPrice:"",
+      sdmAddon:"", sdmPct:"", plAddon:"", customAddon:"",
+      purchaseDate:new Date().toISOString().slice(0,10),
+      purchaseHistory:[{ price:parseFloat(f.purchaseEx), date:new Date().toISOString().slice(0,10), recordedAt:new Date().toISOString() }],
+      highlighted:false, commission:"", highlightNote:"", pinned:false,
+      active:true, notes:"Approved from custom item in "+p.estimateNo,
+      createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
+    };
+    onItemsChange([...items, newItem]);
+    onPendingChange((pending||[]).map(x=>x.id===p.id?{...x,status:"approved"}:x));
+    toast(p.name+" added to price list!");
+    setExpandId(null);
+  }
+
+  function reject(p) {
+    onPendingChange((pending||[]).map(x=>x.id===p.id?{...x,status:"rejected"}:x));
+    toast("Item rejected","warn");
+  }
+
+  return (
+    <div style={SS}>
+      <div style={{ fontSize:14, fontWeight:800, marginBottom:4 }}>⏳ Custom Items Pending Approval</div>
+      <div style={{ fontSize:11, color:C.mute, marginBottom:12 }}>Items added by salesman as custom — review and add to price list.</div>
+      {active.length===0&&<div style={{ textAlign:"center", padding:"20px 0", color:C.mute, fontSize:13 }}>No pending items 🎉</div>}
+      {active.map(p=>(
+        <div key={p.id} style={{ background:"#FFFBEB", border:"1.5px solid #FCD34D", borderRadius:10, padding:"11px 13px", marginBottom:8 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+            <div>
+              <div style={{ fontSize:13, fontWeight:700 }}>{p.name}</div>
+              <div style={{ fontSize:11, color:C.sec, marginTop:2 }}>Used @ {fp(p.priceUsed)} · {p.estimateNo} · {p.salesmanName}</div>
+              <div style={{ fontSize:10, color:C.mute, marginTop:1 }}>{fmtDate(p.submittedAt)}</div>
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={()=>setExpandId(expandId===p.id?null:p.id)} style={{ padding:"5px 10px",borderRadius:6,border:"1.5px solid "+C.blue,background:"#EFF6FF",color:C.blue,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>
+                {expandId===p.id?"▲ Close":"+ Approve"}
+              </button>
+              <button onClick={()=>reject(p)} style={{ padding:"5px 10px",borderRadius:6,border:"1.5px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>Reject</button>
+            </div>
+          </div>
+          {expandId===p.id&&(
+            <div style={{ marginTop:8, borderTop:"1px solid #FCD34D", paddingTop:10 }}>
+              <Fld label="Purchase Price Ex-GST ₹ *">
+                <input style={INP} type="number" placeholder="Required" value={(form[p.id]||{}).purchaseEx||""} onChange={e=>setForm(f=>({...f,[p.id]:{...(f[p.id]||{}),purchaseEx:e.target.value}}))} />
+              </Fld>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <Fld label="Category">
+                  <select style={SEL} value={(form[p.id]||{}).cat||(settings.categories||CATS)[0]} onChange={e=>setForm(f=>({...f,[p.id]:{...(f[p.id]||{}),cat:e.target.value}}))}>
+                    {(settings.categories||CATS).map(cat=><option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                </Fld>
+                <Fld label="GST %">
+                  <select style={SEL} value={(form[p.id]||{}).gst||"0.05"} onChange={e=>setForm(f=>({...f,[p.id]:{...(f[p.id]||{}),gst:e.target.value}}))}>
+                    <option value="0.05">5%</option><option value="0.12">12%</option><option value="0.18">18%</option>
+                  </select>
+                </Fld>
+              </div>
+              <Fld label="Brand">
+                <select style={SEL} value={(form[p.id]||{}).bId||""} onChange={e=>setForm(f=>({...f,[p.id]:{...(f[p.id]||{}),bId:e.target.value}}))}>
+                  <option value="">No Brand</option>
+                  {brands.map(b=><option key={b.id} value={b.id}>{b.code+" — "+b.name}</option>)}
+                </select>
+              </Fld>
+              <BtnP onClick={()=>approve(p)}>✅ Add to Price List</BtnP>
+            </div>
+          )}
+        </div>
+      ))}
+      {(pending||[]).filter(p=>p.status!=="pending").length>0&&(
+        <div style={{ marginTop:8, fontSize:11, color:C.mute, textAlign:"center" }}>
+          {(pending||[]).filter(p=>p.status==="approved").length} approved · {(pending||[]).filter(p=>p.status==="rejected").length} rejected
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MissingPricePanel({ items, brands, onItemsChange }) {
+  const [editId, setEditId] = useState(null);
+  const [val, setVal]       = useState("");
+  // Items where purchaseEx is missing, 0, or <= 1 (placeholder price)
+  const missing = items.filter(i => i.active && (!i.purchaseEx || parseFloat(i.purchaseEx) <= 1));
+  if (!missing.length) return null;
+  const SS = { background:"#FFF5F5", border:"1.5px solid #FCA5A5", borderRadius:12, padding:"14px", marginBottom:10 };
+
+  function save(it) {
+    const v = parseFloat(val);
+    if (!v || v <= 1) return toast("Enter a real purchase price (more than ₹1)","err");
+    const now = new Date().toISOString();
+    const prev = it.purchaseHistory||[];
+    onItemsChange(items.map(x => x.id===it.id
+      ? {...x, purchaseEx:v, purchaseHistory:[...prev,{price:v,date:now.slice(0,10),recordedAt:now}], updatedAt:now}
+      : x
+    ));
+    toast(it.name+" purchase price updated!");
+    setEditId(null); setVal("");
+  }
+
+  return (
+    <div style={SS}>
+      <div style={{ fontSize:14, fontWeight:800, color:C.red, marginBottom:4 }}>⚠ Items Missing Purchase Price</div>
+      <div style={{ fontSize:11, color:C.red, marginBottom:12 }}>These items have no purchase price or ₹1 as placeholder — profit calculations will be wrong.</div>
+      {missing.map(it => {
+        const b = brands.find(x=>x.id===it.bId);
+        return (
+          <div key={it.id} style={{ background:"#fff", border:"1px solid #FCA5A5", borderRadius:9, padding:"10px 13px", marginBottom:7 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:editId===it.id?8:0 }}>
+              <div>
+                <div style={{ fontSize:12, fontWeight:700 }}>{it.name}</div>
+                <div style={{ fontSize:10, color:C.mute, marginTop:1 }}>{it.cat}{b?" · "+b.code:""} · Current: {it.purchaseEx?fp(it.purchaseEx):"Not set"}</div>
+              </div>
+              <button onClick={()=>{ setEditId(editId===it.id?null:it.id); setVal(""); }}
+                style={{ padding:"5px 10px",borderRadius:6,border:"1.5px solid "+C.red,background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>
+                {editId===it.id?"Cancel":"Fix Price"}
+              </button>
+            </div>
+            {editId===it.id&&(
+              <div style={{ display:"flex", gap:8 }}>
+                <input style={Object.assign({},INP,{flex:1})} type="number" step="1" min="2" placeholder="Enter purchase price ₹" value={val} onChange={e=>setVal(e.target.value)} autoFocus />
+                <BtnP onClick={()=>save(it)}>Save</BtnP>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SalesmanAdder({ settings, onSettingsChange }) {
   const [val, setVal] = useState("");
   return (
@@ -2385,7 +2668,7 @@ function SalesmanAdder({ settings, onSettingsChange }) {
   );
 }
 
-function SettingsView({ settings, onSettingsChange, syncStatus }) {
+function SettingsView({ settings, onSettingsChange, syncStatus, devices, onDevicesChange }) {
   const [form, setForm] = useState({
     co:settings.co, tag:settings.tag,
     defaultRL:+(settings.defaultRL*100).toFixed(1),
@@ -2490,6 +2773,28 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
           <BtnP color={pt.col} onClick={() => changePIN(pt.type)}>{"Update " + pt.label + " PIN"}</BtnP>
         </div>
       ))}
+      {/* Device Management */}
+      <div style={SS}>
+        <div style={{ fontSize:14, fontWeight:800, marginBottom:4 }}>📱 Registered Devices</div>
+        <div style={{ fontSize:11, color:C.mute, marginBottom:12 }}>Approve devices to allow access. Block to prevent login.</div>
+        {(devices||[]).length===0&&<div style={{ fontSize:12, color:C.mute, textAlign:"center", padding:"12px 0" }}>No devices registered yet.</div>}
+        {(devices||[]).map(d=>(
+          <div key={d.id} style={{ background:d.status==="approved"?"#F0FDF4":d.status==="blocked"?"#FFF5F5":"#FFFBEB", border:"1.5px solid "+(d.status==="approved"?"#BBF7D0":d.status==="blocked"?"#FCA5A5":"#FCD34D"), borderRadius:9, padding:"10px 13px", marginBottom:8 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+              <div>
+                <div style={{ fontSize:12, fontWeight:700 }}>{d.info||"Unknown Device"}</div>
+                <div style={{ fontSize:10, color:C.mute, marginTop:2 }}>{d.id.slice(0,20)}... · {fmtDate(d.requestedAt)}</div>
+                <div style={{ fontSize:10, fontWeight:700, color:d.status==="approved"?C.profit:d.status==="blocked"?C.red:C.amb, marginTop:2, textTransform:"uppercase" }}>{d.status}</div>
+              </div>
+              <div style={{ display:"flex", gap:6 }}>
+                {d.status!=="approved"&&<button onClick={()=>onDevicesChange((devices||[]).map(x=>x.id===d.id?{...x,status:"approved"}:x))} style={{ padding:"5px 9px",borderRadius:6,border:"1.5px solid "+C.profit,background:C.profBg,color:C.profit,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>✅ Approve</button>}
+                {d.status!=="blocked"&&<button onClick={()=>onDevicesChange((devices||[]).map(x=>x.id===d.id?{...x,status:"blocked"}:x))} style={{ padding:"5px 9px",borderRadius:6,border:"1.5px solid #FCA5A5",background:C.redBg,color:C.red,fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit" }}>🚫 Block</button>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* Salesman Management */}
       <div style={SS}>
         <div style={{ fontSize:14, fontWeight:800, marginBottom:14 }}>👥 Salesmen</div>
@@ -2512,7 +2817,7 @@ function SettingsView({ settings, onSettingsChange, syncStatus }) {
 }
 
 // ── ADMIN APP ─────────────────────────────────────────────────────
-function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, onItemsChange, onLogout, syncStatus, estimates, onEstimatesSave }) {
+function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, onItemsChange, onLogout, syncStatus, estimates, onEstimatesSave, pending, onPendingChange, devices, onDevicesChange }) {
   const [tab, setTab] = useState("master");
   const NAV = [{ id:"master",icon:"📋",label:"Master" },{ id:"dashboard",icon:"📊",label:"Dashboard" },{ id:"brands",icon:"🏷",label:"Brands" },{ id:"settings",icon:"⚙️",label:"Settings" }];
   return (
@@ -2524,10 +2829,10 @@ function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, o
         </div>
         <button onClick={onLogout} style={{ padding:"7px 13px", borderRadius:8, border:"1.5px solid rgba(255,255,255,0.22)", background:"rgba(255,255,255,0.08)", color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>Logout</button>
       </div>
-      {tab === "master"    && <MasterView    brands={brands} items={items} onItemsChange={onItemsChange} settings={settings} />}
-      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} onSettingsChange={onSettingsChange} estimates={estimates} onEstimatesSave={onEstimatesSave} />}
+      {tab === "master"    && <MasterView    brands={brands} items={items} onItemsChange={onItemsChange} settings={settings} pending={pending} onPendingChange={onPendingChange} />}
+      {tab === "dashboard" && <DashboardView brands={brands} items={items} settings={settings} onSettingsChange={onSettingsChange} estimates={estimates} onEstimatesSave={onEstimatesSave} pending={pending} onPendingChange={onPendingChange} />}
       {tab === "brands"    && <BrandsView    brands={brands} onBrandsChange={onBrandsChange} />}
-      {tab === "settings"  && <SettingsView  settings={settings} onSettingsChange={onSettingsChange} syncStatus={syncStatus} />}
+      {tab === "settings"  && <SettingsView  settings={settings} onSettingsChange={onSettingsChange} syncStatus={syncStatus} devices={devices} onDevicesChange={onDevicesChange} />}
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
         {NAV.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2, border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", borderTop:tab===t.id?"2.5px solid "+C.blue:"2.5px solid transparent" }}>
@@ -2540,7 +2845,7 @@ function AdminApp({ settings, onSettingsChange, brands, onBrandsChange, items, o
 }
 
 // ── SALESMAN APP ──────────────────────────────────────────────────
-function SalesmanApp({ settings, brands, items, onLogout, syncStatus, estimates, onEstimatesSave }) {
+function SalesmanApp({ settings, brands, items, onLogout, syncStatus, estimates, onEstimatesSave, pending, onPendingChange }) {
   const [tab, setTab] = useState("prices");
   const [addPopupItem, setAddPopupItem] = useState(null); // item to add from prices tab
 
@@ -2588,7 +2893,7 @@ function SalesmanApp({ settings, brands, items, onLogout, syncStatus, estimates,
         </div>
       )}
       {tab === "prices"   && <PriceListView brands={brands} items={items} settings={settings} isAdmin={false} onAddToEstimate={it => setAddPopupItem(it)} />}
-      {tab === "estimate" && <EstimateView  brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={false} />}
+      {tab === "estimate" && <EstimateView  brands={brands} items={items} settings={settings} estimates={estimates} onEstimatesSave={onEstimatesSave} isAdmin={false} pending={pending} onPendingChange={onPendingChange} />}
       <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:200, background:"#fff", borderTop:"1px solid "+C.border, display:"flex", height:62, boxShadow:"0 -3px 16px rgba(0,0,0,0.07)" }}>
         {NAV.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2, border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", borderTop:tab===t.id?"2.5px solid "+C.blue:"2.5px solid transparent" }}>
@@ -2606,6 +2911,9 @@ export default function App() {
   const [brands,     setBrands]     = useState(DEF_B);
   const [items,      setItems]      = useState(DEF_I);
   const [estimates,  setEstimates]  = useState([]);
+  const [devices,    setDevices]    = useState([]);
+  const [pending,    setPending]    = useState([]);
+  const [deviceApproved, setDeviceApproved] = useState(false);
   const [role,       setRole]       = useState(null);
   const [ready,      setReady]      = useState(false);
   const [syncStatus, setSyncStatus] = useState("synced");
@@ -2636,6 +2944,8 @@ export default function App() {
       if (d.brands)    setBrands(d.brands);
       if (d.items)     setItems(d.items);
       if (d.estimates) setEstimates(d.estimates);
+      if (d.devices)   setDevices(d.devices);
+      if (d.pending)   setPending(d.pending);
       setReady(true);
     }).catch(() => { setSyncStatus("offline"); setReady(true); });
   }, []);
@@ -2648,13 +2958,17 @@ export default function App() {
     const unsubB = onSnapshot(FS.brands(),    snap => { if (snap.exists()) setBrands(snap.data().v);    }, () => setSyncStatus("offline"));
     const unsubI = onSnapshot(FS.items(),     snap => { if (snap.exists()) setItems(snap.data().v);     }, () => setSyncStatus("offline"));
     const unsubE = onSnapshot(FS.estimates(), snap => { if (snap.exists()) setEstimates(snap.data().v); }, () => {});
-    return () => { unsubS(); unsubB(); unsubI(); unsubE(); };
+    const unsubD = onSnapshot(FS.devices(),   snap => { if (snap.exists()) setDevices(snap.data().v||[]); }, () => {});
+    const unsubP = onSnapshot(FS.pending(),   snap => { if (snap.exists()) setPending(snap.data().v||[]); }, () => {});
+    return () => { unsubS(); unsubB(); unsubI(); unsubE(); unsubD(); unsubP(); };
   }, [ready]);
 
   async function saveSettings(next)  { setSettings(next);  setSyncStatus("saving"); try { await fsSave("settings",next);  setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
   async function saveBrands(next)    { setBrands(next);    setSyncStatus("saving"); try { await fsSave("brands",next);    setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
   async function saveItems(next)     { setItems(next);     setSyncStatus("saving"); try { await fsSave("items",next);     setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
   async function saveEstimates(next) { setEstimates(next); try { await fsSave("estimates",next); } catch { toast("Estimate sync failed","err"); } }
+  async function saveDevices(next)   { setDevices(next);   try { await fsSave("devices",next);   } catch { toast("Device sync failed","err"); } }
+  async function savePending(next)   { setPending(next);   try { await fsSave("pending",next);   } catch { toast("Pending sync failed","err"); } }
 
   if (!ready) return (
     <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -2670,9 +2984,10 @@ export default function App() {
 
       <ToastHost />
       <div style={{ fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
-        {!role               && <Login       settings={settings} onLogin={setRole} />}
-        {role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} />}
-        {role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} />}
+        {!deviceApproved && <DeviceGate devices={devices} onDevicesChange={saveDevices} onApproved={()=>setDeviceApproved(true)} />}
+        {deviceApproved && !role               && <Login       settings={settings} onLogin={setRole} />}
+        {deviceApproved && role === "admin"    && <AdminApp    settings={settings} onSettingsChange={saveSettings} brands={brands} onBrandsChange={saveBrands} items={items} onItemsChange={saveItems} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} pending={pending} onPendingChange={savePending} devices={devices} onDevicesChange={saveDevices} />}
+        {deviceApproved && role === "salesman" && <SalesmanApp settings={settings} brands={brands} items={items} onLogout={() => setRole(null)} syncStatus={syncStatus} estimates={estimates} onEstimatesSave={saveEstimates} pending={pending} onPendingChange={savePending} />}
       </div>
     </div>
   );
