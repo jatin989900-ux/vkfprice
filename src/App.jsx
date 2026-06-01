@@ -1578,33 +1578,50 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                     <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #999" }}>Amount</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {saved.lines.map((l,i) => {
-                    const ep   = parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
-                    const disc = parseFloat(l.itemDiscount)||0;
-                    const base = ep*l.qty*(1-disc/100);
-                    const gstAmt = l.includeGST ? +(base*(l.gstPct||0.05)).toFixed(2) : 0;
-                    const amt  = +(base+gstAmt).toFixed(2);
-                    return (
-                       <tr key={l.id} style={{ borderBottom:"1px solid #bbb", background:i%2===0?"#fff":"#F7F9FC" }}>
-                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb", color:"#666", fontSize:10 }}>{i+1}</td>
-                        <td style={{ padding:"5px 7px", border:"1px solid #bbb", fontWeight:600 }}>{l.name}{l.itemDesc?(<div style={{ fontSize:10, color:"#666", marginTop:2 }}>{l.itemDesc}</div>):null}</td>
-                        <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb" }}>{l.qty}</td>
-                        <td style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #bbb" }}>{fp(ep)}</td>
-                        {hasDisc && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb" }}>{disc>0?disc+"%":"-"}</td>}
-                        {hasGST  && <td style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #bbb" }}>
-                          {l.includeGST ? <span style={{ color:"#B45309" }}>+{((l.gstPct||0.05)*100).toFixed(0)}%<br/>{fp(gstAmt)}</span> : "-"}
-                        </td>}
-                        <td style={{ padding:"5px 4px", textAlign:"right", fontWeight:700, border:"1px solid #bbb" }}>{fp(amt)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
+                 <tbody>
+                  {(()=>{
+                    const rows2=[];
+                    let srNo=0; let rowIdx=0;
+                    (saved.lines||[]).forEach((l,idx)=>{
+                      if(l.isDivider){
+                        let grpQty=0;
+                        for(let j=idx-1;j>=0;j--){if((saved.lines[j]).isDivider)break;grpQty+=(saved.lines[j].qty||0);}
+                        const dBg=l.dividerType==="bale"?"#FEF9C3":"#F3F0FF";
+                        const dCol=l.dividerType==="bale"?"#92400E":"#5B21B6";
+                        const tCols=2+(hasDisc?1:0)+(hasGST?1:0)+2;
+                        rows2.push(<tr key={l.id} style={{background:dBg}}>
+                          <td colSpan={tCols} style={{padding:"6px 10px",border:"1px solid #bbb",borderTop:"2px solid "+dCol,fontWeight:800,color:dCol,fontSize:11}}>
+                            {l.dividerType==="bale"?"📦":"🎁"} {l.dividerLabel} — {grpQty} pcs
+                          </td>
+                        </tr>);
+                        rowIdx=0;
+                      } else {
+                        srNo++;
+                        const ep=parseFloat(l.customPrice)>0?parseFloat(l.customPrice):l.unitPrice;
+                        const disc=parseFloat(l.itemDiscount)||0;
+                        const base=ep*l.qty*(1-disc/100);
+                        const gstAmt=l.includeGST?+(base*(l.gstPct||0.05)).toFixed(2):0;
+                        const amt=+(base+gstAmt).toFixed(2);
+                        rows2.push(<tr key={l.id||idx} style={{borderBottom:"1px solid #bbb",background:rowIdx%2===0?"#fff":"#F0F4FA"}}>
+                          <td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb",color:"#666",fontSize:10}}>{srNo}</td>
+                          <td style={{padding:"5px 7px",border:"1px solid #bbb",fontWeight:600}}>{l.name}{l.itemDesc?(<div style={{fontSize:10,color:"#666",marginTop:2}}>{l.itemDesc}</div>):null}</td>
+                          <td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb"}}>{l.qty}</td>
+                          <td style={{padding:"5px 4px",textAlign:"right",border:"1px solid #bbb"}}>{fp(ep)}</td>
+                          {hasDisc&&<td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb"}}>{disc>0?disc+"%":"-"}</td>}
+                          {hasGST&&<td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb"}}>{l.includeGST?<span style={{color:"#B45309"}}>+{((l.gstPct||0.05)*100).toFixed(0)}%<br/>{fp(gstAmt)}</span>:"-"}</td>}
+                          <td style={{padding:"5px 4px",textAlign:"right",fontWeight:700,border:"1px solid #bbb"}}>{fp(amt)}</td>
+                        </tr>);
+                        rowIdx++;
+                      }
+                    });
+                    return rows2;
+                  })()}
+                 </tbody>
               </table>
             );
           })()}
           <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8, fontSize:11, color:"#555" }}>
-            <span>Total Items: <b>{saved.lines.length}</b> &nbsp;|&nbsp; Total Qty: <b>{saved.lines.reduce(function(s,l){return s+l.qty;},0)} pcs</b></span>
+            <span>Total Items: <b>{saved.lines.filter(function(l){return !l.isDivider;}).length}</b> &nbsp;|&nbsp; Total Qty: <b>{saved.lines.filter(function(l){return !l.isDivider;}).reduce(function(s,l){return s+(l.qty||0);},0)} pcs</b></span>
           </div>
           <div style={{ width:"55%", marginLeft:"auto", fontSize:12, fontWeight:600 }}>
             <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", borderBottom:"1px solid #eee" }}><span>Subtotal</span><b>{fp(saved.subtotal)}</b></div>
@@ -1804,10 +1821,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
             <div style={{ fontSize:12, fontWeight:800, color:C.navy }}>Cart ({cartLines.filter(l=>!l.isDivider).length} item{cartLines.filter(l=>!l.isDivider).length!==1?"s":""})</div>
             <div style={{ fontSize:11, color:C.sec, fontWeight:700 }}>Total Qty: {cartLines.filter(l=>!l.isDivider).reduce((s,l)=>s+l.qty,0)} pcs</div>
           </div>
-          <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-            <button onClick={()=>addDivider("bale")} style={{ flex:1, padding:"7px", borderRadius:8, border:"1.5px solid #B45309", background:"#FEF3C7", color:"#92400E", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>📦 Close Bale</button>
-            <button onClick={()=>addDivider("bundle")} style={{ flex:1, padding:"7px", borderRadius:8, border:"1.5px solid #7C3AED", background:"#F5F3FF", color:"#5B21B6", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>🎁 Close Bundle</button>
-          </div>
+
           {cartLines.map(l=>{
             if (l.isDivider) {
               const bg = l.dividerType==="bale" ? "#FEF3C7" : "#F5F3FF";
@@ -1898,6 +1912,11 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               </div>
             );
           })}
+          {/* Bale/Bundle close buttons — below last item */}
+          <div style={{ display:"flex", gap:8, marginBottom:8, marginTop:4 }}>
+            <button onClick={()=>addDivider("bale")} style={{ flex:1, padding:"8px", borderRadius:8, border:"1.5px solid #B45309", background:"#FEF3C7", color:"#92400E", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>📦 Close Bale</button>
+            <button onClick={()=>addDivider("bundle")} style={{ flex:1, padding:"8px", borderRadius:8, border:"1.5px solid #7C3AED", background:"#F5F3FF", color:"#5B21B6", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>🎁 Close Bundle</button>
+          </div>
           {/* Inline add item button — always below last cart item */}
           <div style={{ marginTop:8 }}>
             <button onClick={()=>setShowInlineAdd(p=>!p)}
@@ -2643,7 +2662,7 @@ function MissingPricePanel({ items, brands, onItemsChange }) {
             </div>
             {editId===it.id&&(
               <div style={{ display:"flex", gap:8 }}>
-                <input style={Object.assign({},INP,{flex:1})} type="number" step="1" min="2" placeholder="Enter purchase price ₹" value={val} onChange={e=>setVal(e.target.value)} autoFocus />
+                <input style={Object.assign({},INP,{flex:1,color:"#111",background:"#fff"})} type="number" step="1" min="2" placeholder="Enter purchase price ₹" value={val} onChange={e=>setVal(e.target.value)} autoFocus />
                 <BtnP onClick={()=>save(it)}>Save</BtnP>
               </div>
             )}
