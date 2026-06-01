@@ -654,41 +654,66 @@ function ExportModal({ items, brands, settings, onClose }) {
       "Status":it.active?"Active":"Inactive","Added On":fmtDate(it.createdAt),"Updated On":fmtDate(it.updatedAt),"Notes":it.notes,
     }));
   }
-  function tallyRows() {
-    if (!filtered.length) { toast("No items","warn"); return; }
-    // Tally format: one row per price level per item
-    // Columns: Name | Units | Price Level | Price List - Date | Price List Rate
-    const LEVELS = ["RL","DM","PL","SDM"];
+  // Tally filters state — stored in parent via closure
+  const [tLevels,   setTLevels]   = useState(["RL","DM","PL","SDM"]);
+  const [tDateMode, setTDateMode] = useState("all");  // all|today|yesterday|week|custom
+  const [tFrom,     setTFrom]     = useState("");
+  const [tTo,       setTTo]       = useState("");
+
+  function tallyFilteredItems() {
+    const now = new Date(); now.setHours(0,0,0,0);
+    const yesterday = new Date(now); yesterday.setDate(now.getDate()-1);
+    const weekAgo   = new Date(now); weekAgo.setDate(now.getDate()-7);
+    return filtered.filter(it => {
+      if (tDateMode === "all") return true;
+      const d = new Date(it.updatedAt||it.createdAt||0); d.setHours(0,0,0,0);
+      if (tDateMode === "today")     return d.getTime() === now.getTime();
+      if (tDateMode === "yesterday") return d.getTime() === yesterday.getTime();
+      if (tDateMode === "week")      return d >= weekAgo;
+      if (tDateMode === "custom") {
+        const from = tFrom ? new Date(tFrom) : null;
+        const to   = tTo   ? new Date(tTo)   : null;
+        if (from) { from.setHours(0,0,0,0); if (d < from) return false; }
+        if (to)   { to.setHours(23,59,59,999); if (d > to) return false; }
+        return true;
+      }
+      return true;
+    });
+  }
+
+  function doTallyExport() {
+    if (!tLevels.length) return toast("Select at least one price level","warn");
+    const items2export = tallyFilteredItems();
+    if (!items2export.length) return toast("No items match the filters","warn");
     const data = [];
-    filtered.forEach(it => {
+    items2export.forEach(it => {
       const prices = {
-        RL:  it.rl   ? parseFloat(it.rl.toFixed(2))   : 0,
-        DM:  it.dm   ? parseFloat(it.dm.toFixed(2))   : 0,
-        PL:  it.pl   ? parseFloat(it.pl.toFixed(2))   : 0,
-        SDM: it.sdm  ? parseFloat(it.sdm.toFixed(2))  : 0,
+        RL:  it.rl  ? parseFloat(it.rl.toFixed(2))  : 0,
+        DM:  it.dm  ? parseFloat(it.dm.toFixed(2))  : 0,
+        PL:  it.pl  ? parseFloat(it.pl.toFixed(2))  : 0,
+        SDM: it.sdm ? parseFloat(it.sdm.toFixed(2)) : 0,
       };
-      LEVELS.forEach((lvl, idx) => {
+      let firstRow = true;
+      tLevels.forEach(lvl => {
         data.push({
-          "Name":              idx === 0 ? it.name : "",
-          "Units":             idx === 0 ? "PCS"   : "",
+          "Name":              firstRow ? it.name : "",
+          "Units":             firstRow ? "PCS"   : "",
           "Price Level":       lvl,
           "Price List - Date": "",
           "Price List Rate":   prices[lvl],
         });
+        firstRow = false;
       });
-      // blank row between items
       data.push({ "Name":"","Units":"","Price Level":"","Price List - Date":"","Price List Rate":"" });
     });
-    // Remove trailing blank row
-    if (data.length && !data[data.length-1]["Name"] && !data[data.length-1]["Price Level"]) data.pop();
+    if (data.length && !data[data.length-1]["Price Level"]) data.pop();
     try {
       const ws = XLSX.utils.json_to_sheet(data, { header:["Name","Units","Price Level","Price List - Date","Price List Rate"] });
-      // Set column widths
       ws["!cols"] = [{ wch:35 },{ wch:8 },{ wch:14 },{ wch:18 },{ wch:16 }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Stock Item");
       XLSX.writeFile(wb, "VKF_Tally_Export_"+today+".xlsx");
-      toast("Tally export downloaded!");
+      toast("Tally export downloaded! (" + items2export.length + " items, " + tLevels.join("+") + ")");
     } catch(e) { toast("Export failed","err"); }
   }
   function salesRows() {
@@ -723,9 +748,47 @@ function ExportModal({ items, brands, settings, onClose }) {
           <div style={{ display:"flex", gap:8 }}><BtnP color={C.rl} onClick={() => doXLSX(salesRows(),"VKF_PriceList")} style={{ fontSize:12, padding:"10px" }}>📊 Excel</BtnP><BtnO color={C.rl} onClick={() => doJSON(salesRows(),"VKF_PriceList")} style={{ fontSize:12, padding:"10px" }}>JSON</BtnO></div>
         </div>
         <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:10, padding:"13px", marginTop:10 }}>
-          <div style={{ fontSize:12, fontWeight:800, color:"#065F46", marginBottom:3 }}>🧾 Tally Export</div>
-          <div style={{ fontSize:11, color:"#065F46", marginBottom:10 }}>Exports in Tally stock item price list format (RL / DM / PL / SDM). Items without a price get 0.</div>
-          <BtnP color="#065F46" onClick={tallyRows} style={{ fontSize:12, padding:"10px" }}>⬇ Download for Tally</BtnP>
+          <div style={{ fontSize:12, fontWeight:800, color:"#065F46", marginBottom:10 }}>🧾 Tally Export</div>
+
+          {/* Price level checkboxes */}
+          <div style={{ marginBottom:10 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:"#065F46", marginBottom:6 }}>Price Levels to Export</div>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              {["RL","DM","PL","SDM"].map(lvl => {
+                const on = tLevels.includes(lvl);
+                return (
+                  <button key={lvl} onClick={()=>setTLevels(p=>on?p.filter(x=>x!==lvl):[...p,lvl])}
+                    style={{ padding:"6px 14px", borderRadius:20, border:"1.5px solid "+(on?"#065F46":"#D1FAE5"), background:on?"#065F46":"#fff", color:on?"#fff":"#065F46", fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
+                    {lvl}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Date filter */}
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:"#065F46", marginBottom:6 }}>Date Filter (by last updated)</div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:6 }}>
+              {[["all","All"],["today","Today"],["yesterday","Yesterday"],["week","This Week"],["custom","Custom"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setTDateMode(v)}
+                  style={{ padding:"5px 11px", borderRadius:20, border:"1.5px solid "+(tDateMode===v?"#065F46":"#D1FAE5"), background:tDateMode===v?"#065F46":"#fff", color:tDateMode===v?"#fff":"#065F46", fontWeight:700, fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {tDateMode==="custom"&&(
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <Fld label="From"><input style={INP} type="date" value={tFrom} onChange={e=>setTFrom(e.target.value)} /></Fld>
+                <Fld label="To"><input style={INP} type="date" value={tTo} onChange={e=>setTTo(e.target.value)} /></Fld>
+              </div>
+            )}
+          </div>
+
+          <div style={{ fontSize:11, color:"#047857", marginBottom:10 }}>
+            {tallyFilteredItems().length} items · {tLevels.length} price level{tLevels.length!==1?"s":""} = {tallyFilteredItems().length * tLevels.length} rows
+          </div>
+          <BtnP color="#065F46" onClick={doTallyExport} style={{ fontSize:12, padding:"10px" }}>⬇ Download for Tally</BtnP>
         </div>
       </div>
     </div>
@@ -1452,10 +1515,25 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   }
 
   function addDivider(type) {
+    // If the very last item in the cart is ALREADY a divider of the same type,
+    // increment its count instead of adding a new row
+    const last = cartLines[cartLines.length - 1];
+    if (last && last.isDivider && last.dividerType === type) {
+      const prevCount = last.dividerCount || 1;
+      const newCount  = prevCount + 1;
+      const typeName  = type === "bale" ? "Bale" : "Bundle";
+      setCartLines(p => p.map((l, i) =>
+        i === p.length - 1
+          ? { ...l, dividerCount: newCount, dividerLabel: typeName + " ×" + newCount }
+          : l
+      ));
+      return;
+    }
+    // Otherwise add a new divider row
     const num = (dividerCounts[type]||0) + 1;
     const label = (type === "bale" ? "Bale " : "Bundle ") + num;
     setDividerCounts(p => ({...p, [type]: num}));
-    setCartLines(p => [...p, { id:uid(), isDivider:true, dividerType:type, dividerLabel:label }]);
+    setCartLines(p => [...p, { id:uid(), isDivider:true, dividerType:type, dividerLabel:label, dividerCount:1 }]);
   }
 
   function handleDragStart(idx) { dragItem.current = idx; }
@@ -1648,7 +1726,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                         const tCols=2+(hasDisc?1:0)+(hasGST?1:0)+2;
                         rows2.push(<tr key={l.id} style={{background:dBg}}>
                           <td colSpan={tCols} style={{padding:"4px 10px",border:"1.5px solid #999",borderTop:"2px solid "+dCol,fontWeight:800,color:dCol,fontSize:11}}>
-                            {l.dividerType==="bale"?"[ BALE ]":"[ BUNDLE ]"} {l.dividerLabel} — {grpQty} pcs
+                            {l.dividerType==="bale"?"[ BALE ]":"[ BUNDLE ]"} {l.dividerLabel}{(l.dividerCount||1)>1?" (×"+(l.dividerCount)+")":""} — {grpQty} pcs
                           </td>
                         </tr>);
                         rowIdx=0;
