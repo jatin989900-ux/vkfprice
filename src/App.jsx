@@ -654,6 +654,43 @@ function ExportModal({ items, brands, settings, onClose }) {
       "Status":it.active?"Active":"Inactive","Added On":fmtDate(it.createdAt),"Updated On":fmtDate(it.updatedAt),"Notes":it.notes,
     }));
   }
+  function tallyRows() {
+    if (!filtered.length) { toast("No items","warn"); return; }
+    // Tally format: one row per price level per item
+    // Columns: Name | Units | Price Level | Price List - Date | Price List Rate
+    const LEVELS = ["RL","DM","PL","SDM"];
+    const data = [];
+    filtered.forEach(it => {
+      const prices = {
+        RL:  it.rl   ? parseFloat(it.rl.toFixed(2))   : 0,
+        DM:  it.dm   ? parseFloat(it.dm.toFixed(2))   : 0,
+        PL:  it.pl   ? parseFloat(it.pl.toFixed(2))   : 0,
+        SDM: it.sdm  ? parseFloat(it.sdm.toFixed(2))  : 0,
+      };
+      LEVELS.forEach((lvl, idx) => {
+        data.push({
+          "Name":              idx === 0 ? it.name : "",
+          "Units":             idx === 0 ? "PCS"   : "",
+          "Price Level":       lvl,
+          "Price List - Date": "",
+          "Price List Rate":   prices[lvl],
+        });
+      });
+      // blank row between items
+      data.push({ "Name":"","Units":"","Price Level":"","Price List - Date":"","Price List Rate":"" });
+    });
+    // Remove trailing blank row
+    if (data.length && !data[data.length-1]["Name"] && !data[data.length-1]["Price Level"]) data.pop();
+    try {
+      const ws = XLSX.utils.json_to_sheet(data, { header:["Name","Units","Price Level","Price List - Date","Price List Rate"] });
+      // Set column widths
+      ws["!cols"] = [{ wch:35 },{ wch:8 },{ wch:14 },{ wch:18 },{ wch:16 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Stock Item");
+      XLSX.writeFile(wb, "VKF_Tally_Export_"+today+".xlsx");
+      toast("Tally export downloaded!");
+    } catch(e) { toast("Export failed","err"); }
+  }
   function salesRows() {
     return filtered.map(it => ({
       "Category":it.cat,"Brand Code":it._b?it._b.code:"","Brand Name":it._b?it._b.name:"","Item Name":it.name,
@@ -684,6 +721,11 @@ function ExportModal({ items, brands, settings, onClose }) {
           <div style={{ fontSize:12, fontWeight:800, color:C.rl, marginBottom:3 }}>📋 Salesman Export</div>
           <div style={{ fontSize:11, color:C.rl, marginBottom:10 }}>Prices only. Safe to share.</div>
           <div style={{ display:"flex", gap:8 }}><BtnP color={C.rl} onClick={() => doXLSX(salesRows(),"VKF_PriceList")} style={{ fontSize:12, padding:"10px" }}>📊 Excel</BtnP><BtnO color={C.rl} onClick={() => doJSON(salesRows(),"VKF_PriceList")} style={{ fontSize:12, padding:"10px" }}>JSON</BtnO></div>
+        </div>
+        <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:10, padding:"13px", marginTop:10 }}>
+          <div style={{ fontSize:12, fontWeight:800, color:"#065F46", marginBottom:3 }}>🧾 Tally Export</div>
+          <div style={{ fontSize:11, color:"#065F46", marginBottom:10 }}>Exports in Tally stock item price list format (RL / DM / PL / SDM). Items without a price get 0.</div>
+          <BtnP color="#065F46" onClick={tallyRows} style={{ fontSize:12, padding:"10px" }}>⬇ Download for Tally</BtnP>
         </div>
       </div>
     </div>
