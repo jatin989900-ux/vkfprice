@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { initializeApp } from "firebase/app";
@@ -487,6 +486,49 @@ function getDeviceInfo() {
   const browser = ua.includes("Chrome") ? "Chrome" : ua.includes("Firefox") ? "Firefox" : ua.includes("Safari") ? "Safari" : "Browser";
   const os = ua.includes("Android") ? "Android" : ua.includes("iPhone") || ua.includes("iPad") ? "iOS" : ua.includes("Windows") ? "Windows" : "Other";
   return browser + " / " + os;
+}
+
+// ── ADMIN SELF-APPROVE (for admin's own device on waiting screen) ──
+function AdminSelfApprove({ settings, devices, onDevicesChange, onApproved }) {
+  const [show,  setShow]  = useState(false);
+  const [pin,   setPin]   = useState("");
+  const [err,   setErr]   = useState(false);
+
+  function tryApprove() {
+    if (pin === (settings.adminPIN||"1234")) {
+      const myId = getOrCreateDeviceId();
+      const next = (devices||[]).map(d => d.id===myId ? {...d, status:"approved"} : d);
+      onDevicesChange(next);
+      onApproved();
+      toast("Device approved!");
+    } else {
+      setErr(true);
+      setTimeout(()=>setErr(false), 1000);
+      setPin("");
+    }
+  }
+
+  if (!show) return (
+    <button onClick={()=>setShow(true)} style={{ background:"none", border:"none", color:C.mute, fontSize:12, cursor:"pointer", fontFamily:"inherit", textDecoration:"underline" }}>
+      I am the Admin
+    </button>
+  );
+
+  return (
+    <div style={{ marginTop:8, borderTop:"1px solid "+C.border, paddingTop:16 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:C.navy, marginBottom:10 }}>Enter Admin PIN</div>
+      <input
+        type="password" inputMode="numeric" maxLength={4}
+        value={pin} onChange={e=>setPin(e.target.value)}
+        style={Object.assign({},INP,{ textAlign:"center", fontSize:22, letterSpacing:8, marginBottom:10, borderColor:err?C.red:C.border })}
+        placeholder="••••"
+        autoFocus
+      />
+      <button onClick={tryApprove} style={{ width:"100%", padding:"11px", borderRadius:9, border:"none", background:C.navy, color:"#fff", fontWeight:700, fontSize:14, cursor:"pointer", fontFamily:"inherit" }}>
+        Approve This Device
+      </button>
+    </div>
+  );
 }
 
 function Login({ settings, onLogin }) {
@@ -2971,7 +3013,8 @@ export default function App() {
               <div style={{ fontSize:40, marginBottom:12 }}>📱</div>
               <div style={{ fontSize:16, fontWeight:800, color:C.navy, marginBottom:8 }}>Waiting for Approval</div>
               <div style={{ fontSize:13, color:C.sec, marginBottom:16 }}>This device is pending approval. Ask your admin to approve it in Settings → Registered Devices.</div>
-              <button onClick={()=>window.location.reload()} style={{ padding:"10px 24px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>🔄 Check Again</button>
+              <button onClick={()=>window.location.reload()} style={{ padding:"10px 24px", borderRadius:9, border:"none", background:C.blue, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer", fontFamily:"inherit", marginBottom:16, width:"100%" }}>🔄 Check Again</button>
+              <AdminSelfApprove settings={settings} devices={devices} onDevicesChange={saveDevices} onApproved={()=>setDeviceStatus("approved")} />
             </div>
           </div>
         )}
@@ -2991,4 +3034,3 @@ export default function App() {
     </div>
   );
 }
-
