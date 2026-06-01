@@ -1334,6 +1334,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
   const [customItemQty,   setCustomItemQty]   = useState("1");
   const [showInlineAdd,   setShowInlineAdd]   = useState(false);
   const [inlineSearch,    setInlineSearch]    = useState("");
+  const dragItem = useRef(null);
+  const dragOver = useRef(null);
   const [dividerCounts,   setDividerCounts]   = useState({ bale:0, bundle:0 });
 
   useEffect(() => {
@@ -1412,6 +1414,19 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
     const label = (type === "bale" ? "Bale " : "Bundle ") + num;
     setDividerCounts(p => ({...p, [type]: num}));
     setCartLines(p => [...p, { id:uid(), isDivider:true, dividerType:type, dividerLabel:label }]);
+  }
+
+  function handleDragStart(idx) { dragItem.current = idx; }
+  function handleDragEnter(idx) { dragOver.current = idx; }
+  function handleDragEnd() {
+    if (dragItem.current === null || dragOver.current === null || dragItem.current === dragOver.current) {
+      dragItem.current = null; dragOver.current = null; return;
+    }
+    const next = [...cartLines];
+    const dragged = next.splice(dragItem.current, 1)[0];
+    next.splice(dragOver.current, 0, dragged);
+    setCartLines(next);
+    dragItem.current = null; dragOver.current = null;
   }
 
   function effPrice(l) { const cp=parseFloat(l.customPrice); return (!isNaN(cp)&&cp>0)?cp:l.unitPrice; }
@@ -1569,13 +1584,13 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11, marginBottom:12, fontWeight:500 }}>
                 <thead>
                   <tr style={{ background:"#E5E7EB" }}>
-                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999", width:"28px" }}>Sr.</th>
-                    <th style={{ padding:"5px 7px", textAlign:"left", border:"1px solid #999" }}>Item</th>
-                    <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999" }}>Qty</th>
-                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #999" }}>Rate</th>
-                    {hasDisc && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999" }}>Disc%</th>}
-                    {hasGST  && <th style={{ padding:"5px 4px", textAlign:"center", border:"1px solid #999" }}>GST</th>}
-                    <th style={{ padding:"5px 4px", textAlign:"right", border:"1px solid #999" }}>Amount</th>
+                    <th style={{ padding:"3px 4px", textAlign:"center", border:"1.5px solid #888", width:"28px" }}>Sr.</th>
+                    <th style={{ padding:"3px 6px", textAlign:"left", border:"1.5px solid #888" }}>Item</th>
+                    <th style={{ padding:"3px 4px", textAlign:"center", border:"1.5px solid #888" }}>Qty</th>
+                    <th style={{ padding:"3px 4px", textAlign:"right", border:"1.5px solid #888" }}>Rate</th>
+                    {hasDisc && <th style={{ padding:"3px 4px", textAlign:"center", border:"1.5px solid #888" }}>Disc%</th>}
+                    {hasGST  && <th style={{ padding:"3px 4px", textAlign:"center", border:"1.5px solid #888" }}>GST</th>}
+                    <th style={{ padding:"3px 4px", textAlign:"right", border:"1.5px solid #888" }}>Amount</th>
                   </tr>
                 </thead>
                  <tbody>
@@ -1590,8 +1605,8 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                         const dCol=l.dividerType==="bale"?"#92400E":"#5B21B6";
                         const tCols=2+(hasDisc?1:0)+(hasGST?1:0)+2;
                         rows2.push(<tr key={l.id} style={{background:dBg}}>
-                          <td colSpan={tCols} style={{padding:"6px 10px",border:"1px solid #bbb",borderTop:"2px solid "+dCol,fontWeight:800,color:dCol,fontSize:11}}>
-                            {l.dividerType==="bale"?"📦":"🎁"} {l.dividerLabel} — {grpQty} pcs
+                          <td colSpan={tCols} style={{padding:"4px 10px",border:"1.5px solid #999",borderTop:"2px solid "+dCol,fontWeight:800,color:dCol,fontSize:11}}>
+                            {l.dividerType==="bale"?"[ BALE ]":"[ BUNDLE ]"} {l.dividerLabel} — {grpQty} pcs
                           </td>
                         </tr>);
                         rowIdx=0;
@@ -1603,13 +1618,13 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                         const gstAmt=l.includeGST?+(base*(l.gstPct||0.05)).toFixed(2):0;
                         const amt=+(base+gstAmt).toFixed(2);
                         rows2.push(<tr key={l.id||idx} style={{borderBottom:"1px solid #bbb",background:rowIdx%2===0?"#fff":"#F0F4FA"}}>
-                          <td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb",color:"#666",fontSize:10}}>{srNo}</td>
-                          <td style={{padding:"5px 7px",border:"1px solid #bbb",fontWeight:600}}>{l.name}{l.itemDesc?(<div style={{fontSize:10,color:"#666",marginTop:2}}>{l.itemDesc}</div>):null}</td>
-                          <td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb"}}>{l.qty}</td>
-                          <td style={{padding:"5px 4px",textAlign:"right",border:"1px solid #bbb"}}>{fp(ep)}</td>
-                          {hasDisc&&<td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb"}}>{disc>0?disc+"%":"-"}</td>}
-                          {hasGST&&<td style={{padding:"5px 4px",textAlign:"center",border:"1px solid #bbb"}}>{l.includeGST?<span style={{color:"#B45309"}}>+{((l.gstPct||0.05)*100).toFixed(0)}%<br/>{fp(gstAmt)}</span>:"-"}</td>}
-                          <td style={{padding:"5px 4px",textAlign:"right",fontWeight:700,border:"1px solid #bbb"}}>{fp(amt)}</td>
+                          <td style={{padding:"3px 4px",textAlign:"center",border:"1.5px solid #999",color:"#666",fontSize:10}}>{srNo}</td>
+                          <td style={{padding:"3px 6px",border:"1.5px solid #999",fontWeight:600}}>{l.name}{l.itemDesc?(<div style={{fontSize:10,color:"#666",marginTop:2}}>{l.itemDesc}</div>):null}</td>
+                          <td style={{padding:"3px 4px",textAlign:"center",border:"1.5px solid #999"}}>{l.qty}</td>
+                          <td style={{padding:"3px 4px",textAlign:"right",border:"1.5px solid #999"}}>{fp(ep)}</td>
+                          {hasDisc&&<td style={{padding:"3px 4px",textAlign:"center",border:"1.5px solid #999"}}>{disc>0?disc+"%":"-"}</td>}
+                          {hasGST&&<td style={{padding:"3px 4px",textAlign:"center",border:"1.5px solid #999"}}>{l.includeGST?<span style={{color:"#B45309"}}>+{((l.gstPct||0.05)*100).toFixed(0)}%<br/>{fp(gstAmt)}</span>:"-"}</td>}
+                          <td style={{padding:"3px 4px",textAlign:"right",fontWeight:700,border:"1.5px solid #999"}}>{fp(amt)}</td>
                         </tr>);
                         rowIdx++;
                       }
@@ -1633,7 +1648,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
             <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", fontWeight:900, fontSize:16, borderTop:"2px solid #000" }}><span>GRAND TOTAL</span><span>{fp(saved.grandTotal)}</span></div>
           </div>
           {saved.narration&&<div style={{ marginTop:8, fontSize:11, borderTop:"1px solid #999", paddingTop:6 }}><b>Note:</b> {saved.narration}</div>}
-          {saved.divSummary&&<div style={{ marginTop:6, fontSize:11, fontWeight:700 }}>📦 {saved.divSummary}</div>}
+          {saved.divSummary&&<div style={{ marginTop:6, fontSize:11, fontWeight:700 }}>{saved.divSummary}</div>}
           <div style={{ marginTop:10, fontSize:10, textAlign:"center", color:"#888", borderTop:"1px solid #999", paddingTop:6 }}>This is a computer generated estimate — {settings.co}</div>
         </div>
 
@@ -1854,10 +1869,10 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
               : (PRICE_TYPES.find(p=>p.id===l.priceType)||PRICE_TYPES[0]);
             const ep=effPrice(l); const hasCustom=parseFloat(l.customPrice)>0;
             return (
-              <div key={l.id} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"11px 12px", marginBottom:8 }}>
+              <div key={l.id} draggable onDragStart={()=>handleDragStart(cartLines.indexOf(l))} onDragEnter={()=>handleDragEnter(cartLines.indexOf(l))} onDragEnd={handleDragEnd} onDragOver={e=>e.preventDefault()} style={{ background:"#F9FAFB", border:"1px solid "+C.border, borderRadius:10, padding:"11px 12px", marginBottom:8, cursor:"grab" }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
                   <div style={{ flex:1, paddingRight:8 }}>
-                    <div style={{ fontSize:13, fontWeight:700 }}>{l.name}</div>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:16, color:C.mute, cursor:"grab" }}>⠿</span><span style={{ fontSize:13, fontWeight:700 }}>{l.name}</span></div>
                     <input
                       style={{ width:"100%", marginTop:4, padding:"4px 8px", borderRadius:6, border:"1px dashed "+C.border, fontSize:11, color:C.sec, fontFamily:"inherit", background:"#FAFBFD", outline:"none" }}
                       placeholder="Add description (optional)"
@@ -1881,7 +1896,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
                     <div style={{ fontSize:10,color:C.sec,fontWeight:700,marginBottom:3 }}>QTY</div>
                     <div style={{ display:"flex", alignItems:"center", gap:4 }}>
                       <button onClick={()=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:Math.max(1,x.qty-1)}:x))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid "+C.border,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14 }}>−</button>
-                      <input type="number" min="1" value={l.qty} onChange={e=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:Math.max(1,parseInt(e.target.value)||1)}:x))} style={{ width:40,textAlign:"center",padding:"5px 2px",borderRadius:6,border:"1.5px solid "+C.border,fontSize:13,fontWeight:700,fontFamily:"inherit" }} />
+                      <input type="number" min="1" value={l.qty===0?"":l.qty} onChange={e=>{ const v=e.target.value; setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:v===""?0:Math.max(1,parseInt(v)||1)}:x)); }} onBlur={e=>{ if(!e.target.value||parseInt(e.target.value)<1) setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:1}:x)); }} style={{ width:40,textAlign:"center",padding:"5px 2px",borderRadius:6,border:"1.5px solid "+C.border,fontSize:13,fontWeight:700,fontFamily:"inherit" }} />
                       <button onClick={()=>setCartLines(p=>p.map(x=>x.id===l.id?{...x,qty:x.qty+1}:x))} style={{ width:28,height:28,borderRadius:6,border:"1.5px solid "+C.border,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:14 }}>+</button>
                     </div>
                   </div>
@@ -1954,7 +1969,7 @@ function EstimateView({ brands, items, settings, estimates, onEstimatesSave, isA
         <div style={SS}>
           <div style={{ fontSize:12,fontWeight:800,color:C.navy,marginBottom:12 }}>Bill Summary</div>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.sec, marginBottom:6 }}>
-            <span>Total Items</span><span style={{ fontWeight:700 }}>{cartLines.length} item{cartLines.length!==1?"s":""} · {cartLines.reduce((s,l)=>s+l.qty,0)} pcs</span>
+            <span>Total Items</span><span style={{ fontWeight:700, color:C.navy }}>{cartLines.filter(l=>!l.isDivider).length} items · {cartLines.filter(l=>!l.isDivider).reduce((s,l)=>s+(l.qty||0),0)} pcs</span>
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:10 }}><span style={{ color:C.sec }}>Subtotal</span><span style={{ fontWeight:800 }}>{fp(subtotal)}</span></div>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
@@ -2662,8 +2677,8 @@ function MissingPricePanel({ items, brands, onItemsChange }) {
             </div>
             {editId===it.id&&(
               <div style={{ display:"flex", gap:8 }}>
-                <input style={Object.assign({},INP,{flex:1,color:"#111",background:"#fff"})} type="number" step="1" min="2" placeholder="Enter purchase price ₹" value={val} onChange={e=>setVal(e.target.value)} autoFocus />
-                <BtnP onClick={()=>save(it)}>Save</BtnP>
+                <input style={{flex:1,padding:"12px 10px",borderRadius:9,border:"2px solid "+C.blue,fontSize:16,fontWeight:700,color:"#111",background:"#fff",fontFamily:"inherit",outline:"none"}} type="number" step="1" min="2" placeholder="e.g. 250" value={val} onChange={e=>setVal(e.target.value)} autoFocus />
+                <button onClick={()=>save(it)} style={{padding:"12px 14px",borderRadius:9,border:"none",background:C.profit,color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Save</button>
               </div>
             )}
           </div>
@@ -3008,7 +3023,17 @@ export default function App() {
   async function saveSettings(next)  { setSettings(next);  setSyncStatus("saving"); try { await fsSave("settings",next);  setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
   async function saveBrands(next)    { setBrands(next);    setSyncStatus("saving"); try { await fsSave("brands",next);    setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
   async function saveItems(next)     { setItems(next);     setSyncStatus("saving"); try { await fsSave("items",next);     setSyncStatus("synced"); } catch { setSyncStatus("error"); toast("Sync failed","err"); } }
-  async function saveEstimates(next) { setEstimates(next); try { await fsSave("estimates",next); } catch { toast("Estimate sync failed","err"); } }
+  async function saveEstimates(next) {
+    setEstimates(next);
+    try { await fsSave("estimates",next); }
+    catch {
+      // retry once after 2 seconds
+      setTimeout(async () => {
+        try { await fsSave("estimates",next); }
+        catch { toast("Estimate sync failed — check connection","err"); }
+      }, 2000);
+    }
+  }
   async function saveDevices(next)   { setDevices(next);   try { await fsSave("devices",next);   } catch { toast("Device sync failed","err"); } }
   async function savePending(next)   { setPending(next);   try { await fsSave("pending",next);   } catch { toast("Pending sync failed","err"); } }
 
